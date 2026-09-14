@@ -7,12 +7,19 @@ import { renderEditorReviewSummaryHtml } from "../review/editorReviewSummary";
 import { getReviewDrafts, isDraftExpanded } from "../review/reviewDrafts";
 import { renderMrDescriptionHtml } from "../review/mrDescriptionHtml";
 import { renderMrFlowSvg } from "../graph/mrFlowDiagram";
+import type { MrDiscussionThreadView } from "../gitlab/types";
+import { renderMrDiscussionsSection } from "../review/mrDiscussionsPanel";
+import { setDiffReviewOpen } from "../review/reviewFileNavigation";
+import type { ReviewSession } from "../review/reviewSession";
 
 type PanelState = {
   session: ReviewSession;
   activePath: string;
   reviewedPaths: Set<string>;
   onSourceBranch: boolean;
+  discussions: MrDiscussionThreadView[];
+  discussionsLoading: boolean;
+  discussionsError?: string;
 };
 
 export class VisualReviewPanel {
@@ -47,6 +54,9 @@ export class VisualReviewPanel {
         activePath: startPath,
         reviewedPaths: new Set(reviewedPaths),
         onSourceBranch: VisualReviewPanel.current.state.onSourceBranch,
+        discussions: VisualReviewPanel.current.state.discussions,
+        discussionsLoading: VisualReviewPanel.current.state.discussionsLoading,
+        discussionsError: VisualReviewPanel.current.state.discussionsError,
       };
       VisualReviewPanel.current.render();
       VisualReviewPanel.current.panel.reveal(vscode.ViewColumn.One);
@@ -60,7 +70,7 @@ export class VisualReviewPanel {
     );
     const instance = new VisualReviewPanel(
       panel,
-      { session, activePath: startPath, reviewedPaths: new Set(reviewedPaths), onSourceBranch: false },
+      { session, activePath: startPath, reviewedPaths: new Set(reviewedPaths), onSourceBranch: false, discussions: [], discussionsLoading: true },
       onMessage,
     );
     VisualReviewPanel.current = instance;
@@ -95,8 +105,24 @@ export class VisualReviewPanel {
     this.render();
   }
 
+  setDiscussionsLoading(loading: boolean): void {
+    this.state.discussionsLoading = loading;
+    if (loading) {
+      this.state.discussionsError = undefined;
+    }
+    this.render();
+  }
+
+  setDiscussions(threads: MrDiscussionThreadView[], error?: string): void {
+    this.state.discussions = threads;
+    this.state.discussionsLoading = false;
+    this.state.discussionsError = error;
+    this.render();
+  }
+
   private render(): void {
-    const { session, activePath, reviewedPaths } = this.state;
+    const { session, activePath, reviewedPaths, discussions, discussionsLoading, discussionsError } =
+      this.state;
     const activeChange = session.changeByPath.get(activePath);
     const previewHtml = activeChange
       ? renderEditorReviewSummaryHtml(
@@ -116,6 +142,11 @@ export class VisualReviewPanel {
     const drafts = getReviewDrafts();
     const draftsHtml = renderDraftsSection(drafts);
     const overviewHtml = renderMrOverview(session, activePath);
+    const discussionsHtml = renderMrDiscussionsSection(
+      discussions,
+      discussionsLoading,
+      discussionsError,
+    );
 
     this.panel.webview.html = `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -129,7 +160,8 @@ header { padding: 10px 12px; border-bottom: 1px solid var(--vscode-panel-border)
 header h1 { font-size: 13px; margin: 0; flex: 1; min-width: 200px; }
 .progress { font-size: 12px; opacity: 0.85; }
 .toolbar button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: 0; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
-.toolbar button.secondary { background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+.toolbar button.danger { background: var(--vscode-inputValidation-errorBackground); color: var(--vscode-inputValidation-errorForeground); }
+.toolbar button.approve { background: var(--vscode-gitDecoration-addedResourceForeground, #2ea043); color: var(--vscode-button-foreground, #fff); }
 main { flex: 1; display: grid; grid-template-columns: 300px 1fr; min-height: 0; }
 .queue { border-right: 1px solid var(--vscode-panel-border); overflow: auto; padding: 8px; }
 .queue-item { width: 100%; text-align: left; border: 1px solid var(--vscode-panel-border); background: var(--vscode-sideBar-background); color: inherit; border-radius: 8px; padding: 8px; margin-bottom: 8px; cursor: pointer; }
@@ -177,6 +209,46 @@ main { flex: 1; display: grid; grid-template-columns: 300px 1fr; min-height: 0; 
 .mr-overview h2 { font-size: 12px; margin: 0 0 8px; font-weight: 600; }
 .mr-overview h2:not(:first-child) { margin-top: 16px; }
 .mr-description-body { font-size: 12px; line-height: 1.55; opacity: 0.95; }
+.mr-description-body.markdown-body { font-size: 13px; line-height: 1.6; }
+.markdown-body > :first-child { margin-top: 0; }
+.markdown-body > :last-child { margin-bottom: 0; }
+.markdown-body h1, .markdown-body h2, .markdown-body h3, .markdown-body h4, .markdown-body h5, .markdown-body h6 {
+  margin: 1em 0 0.5em; font-weight: 600; line-height: 1.3;
+}
+.markdown-body h1 { font-size: 1.35em; border-bottom: 1px solid var(--vscode-panel-border); padding-bottom: 0.25em; }
+.markdown-body h2 { font-size: 1.2em; border-bottom: 1px solid var(--vscode-panel-border); padding-bottom: 0.2em; }
+.markdown-body h3 { font-size: 1.08em; }
+.markdown-body h4, .markdown-body h5, .markdown-body h6 { font-size: 1em; opacity: 0.95; }
+.markdown-body p { margin: 0.6em 0; }
+.markdown-body ul, .markdown-body ol { margin: 0.5em 0; padding-left: 1.4em; }
+.markdown-body li + li { margin-top: 0.25em; }
+.markdown-body li.task-list-item { list-style: none; margin-left: -1.4em; padding-left: 1.4em; }
+.markdown-body input[type="checkbox"] { margin-right: 0.4em; vertical-align: middle; pointer-events: none; }
+.markdown-body blockquote {
+  margin: 0.75em 0; padding: 0.4em 0.8em;
+  border-left: 3px solid var(--vscode-textBlockQuote-border, var(--vscode-focusBorder));
+  background: var(--vscode-textBlockQuote-background, var(--vscode-editor-inactiveSelectionBackground));
+  color: var(--vscode-editor-foreground); opacity: 0.92;
+}
+.markdown-body code {
+  font-family: var(--vscode-editor-font-family); font-size: 0.92em;
+  background: var(--vscode-textCodeBlock-background, var(--vscode-textBlockQuote-background));
+  padding: 0.15em 0.35em; border-radius: 4px;
+}
+.markdown-body pre {
+  margin: 0.75em 0; padding: 10px 12px; overflow: auto; border-radius: 6px;
+  background: var(--vscode-textCodeBlock-background, rgba(0,0,0,.2));
+  border: 1px solid var(--vscode-panel-border);
+}
+.markdown-body pre code { background: none; padding: 0; font-size: 11px; line-height: 1.45; }
+.markdown-body a.md-link { color: var(--vscode-textLink-foreground); text-decoration: underline; cursor: pointer; }
+.markdown-body a.md-link:hover { color: var(--vscode-textLink-activeForeground); }
+.markdown-body hr { border: 0; border-top: 1px solid var(--vscode-panel-border); margin: 1em 0; }
+.markdown-body table { border-collapse: collapse; width: 100%; margin: 0.75em 0; font-size: 12px; display: block; overflow-x: auto; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--vscode-panel-border); padding: 6px 8px; text-align: left; }
+.markdown-body th { background: var(--vscode-editor-inactiveSelectionBackground); font-weight: 600; }
+.markdown-body img { max-width: 100%; height: auto; border-radius: 4px; margin: 0.5em 0; }
+.markdown-body del { opacity: 0.75; }
 .mr-description-body h3, .mr-description-body h4, .mr-description-body h5 { margin: 8px 0 4px; font-size: 12px; }
 .mr-description-body ul { margin: 6px 0; padding-left: 18px; }
 .mr-description-body code { font-family: var(--vscode-editor-font-family); font-size: 11px; background: var(--vscode-textBlockQuote-background); padding: 1px 4px; border-radius: 3px; }
@@ -189,6 +261,24 @@ main { flex: 1; display: grid; grid-template-columns: 300px 1fr; min-height: 0; 
 .flow-hint { font-size: 11px; opacity: 0.75; margin: 6px 0 0; }
 .file-section { padding: 0 12px 12px; border-bottom: 1px solid var(--vscode-panel-border); }
 .file-section .path { padding-top: 10px; }
+.discussions { margin: 12px; padding: 10px; border: 1px solid var(--vscode-panel-border); border-radius: 8px; background: var(--vscode-sideBar-background); }
+.discussions-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+.discussions-head h2 { font-size: 12px; margin: 0; flex: 1; }
+.discussions-refresh { font-size: 11px; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--vscode-panel-border); cursor: pointer; }
+.discussions-status, .discussions-error { font-size: 12px; opacity: 0.85; margin: 0; }
+.discussions-error { color: var(--vscode-inputValidation-errorForeground); }
+.thread-card { border: 1px solid var(--vscode-panel-border); border-radius: 8px; padding: 8px; margin-bottom: 10px; }
+.thread-card.has-reply { border-color: var(--vscode-focusBorder); }
+.thread-card-head { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-bottom: 8px; }
+.thread-loc { font-size: 11px; font-family: var(--vscode-editor-font-family); word-break: break-all; flex: 1; }
+.thread-badge { font-size: 10px; padding: 2px 6px; border-radius: 999px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
+.thread-badge.reply { background: var(--vscode-inputValidation-infoBackground); color: var(--vscode-inputValidation-infoForeground); }
+.thread-note { margin-bottom: 8px; padding: 6px 8px; border-radius: 6px; background: var(--vscode-editor-background); }
+.thread-note.mine { border-left: 3px solid var(--vscode-gitDecoration-addedResourceForeground); }
+.thread-note.theirs { border-left: 3px solid var(--vscode-textLink-foreground); }
+.thread-note-meta { font-size: 10px; opacity: 0.85; margin-bottom: 4px; }
+.thread-note-body { font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+.thread-goto { font-size: 11px; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--vscode-panel-border); cursor: pointer; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
 </style>
 </head>
 <body>
@@ -202,12 +292,15 @@ main { flex: 1; display: grid; grid-template-columns: 300px 1fr; min-height: 0; 
     <button onclick="post('toggleReviewed')">Marcar revisado</button>
     <button onclick="post('submitAllDrafts')" ${drafts.length === 0 ? "disabled" : ""}>Enviar fila (${drafts.length})</button>
     <button class="secondary" onclick="post('cancelDrafts')" ${drafts.length === 0 ? "disabled" : ""}>Limpar fila</button>
+    <button class="approve" onclick="post('approveMr')">Aprovar MR</button>
+    <button class="danger" onclick="post('rejectMr')">Rejeitar MR</button>
   </div>
 </header>
 <main>
   <section class="queue">${queueHtml}</section>
   <section class="detail">
     ${overviewHtml}
+    ${discussionsHtml}
     <div class="file-section">
       <div class="path">${escapeHtml(activePath)}</div>
     </div>
@@ -253,6 +346,29 @@ document.querySelectorAll('.flow-node').forEach(node => {
     if (path) post('select', path);
   });
 });
+document.querySelector('.discussions-refresh')?.addEventListener('click', () => post('refreshDiscussions'));
+document.querySelector('.mr-description-body')?.addEventListener('click', (e) => {
+  const target = e.target;
+  if (!(target instanceof Element)) return;
+  const anchor = target.closest('a.md-link');
+  if (!anchor) return;
+  e.preventDefault();
+  const href = anchor.getAttribute('href');
+  if (href && href !== '#') vscode.postMessage({ type: 'openExternalLink', href });
+});
+document.querySelectorAll('.thread-goto').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const path = btn.getAttribute('data-path');
+    if (!path) return;
+    const line = btn.getAttribute('data-line');
+    const side = btn.getAttribute('data-side') || 'new';
+    if (line) {
+      vscode.postMessage({ type: 'goToThread', path, line: Number(line), side });
+    } else {
+      post('select', path);
+    }
+  });
+});
 </script>
 </body>
 </html>`;
@@ -281,6 +397,11 @@ export type WebviewRequest =
   | { type: "removeDraft"; id: string }
   | { type: "goToDraft"; id: string }
   | { type: "toggleDraft"; id: string }
+  | { type: "approveMr" }
+  | { type: "rejectMr" }
+  | { type: "refreshDiscussions" }
+  | { type: "goToThread"; path: string; line: number; side: "new" | "old" }
+  | { type: "openExternalLink"; href: string }
   | { type: "commentLineRemoved"; path?: string; oldLine?: number };
 
 function renderDraftsSection(drafts: ReturnType<typeof getReviewDrafts>): string {

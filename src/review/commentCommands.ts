@@ -22,6 +22,7 @@ import {
   getReviewDrafts,
   stopReviewDraftMode,
 } from "./reviewDrafts";
+import { requestMrDiscussionsRefresh } from "./mrDiscussionsRefresh";
 
 export async function submitLineThreadDirect(
   client: GitLabClient,
@@ -35,6 +36,7 @@ export async function submitLineThreadDirect(
   const change = session.changeByPath.get(filePath);
   await postLineThreadComment(client, target, filePath, line, body, change, side);
   notifyThreadPosted(target.mr, filePath, line);
+  requestMrDiscussionsRefresh(session);
 }
 
 export function beginReviewDraftSession(): void {
@@ -129,6 +131,7 @@ export async function submitAllQueuedReviewComments(
     return;
   }
   notifyPosted(session.mr, `${ok} comentário(s) publicados no MR`);
+  requestMrDiscussionsRefresh(session);
 }
 
 export function cancelReviewDraftSession(): void {

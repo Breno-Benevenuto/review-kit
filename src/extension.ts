@@ -21,6 +21,7 @@ import {
   resolveProjectIdForMr,
   setActiveGitLabProject,
 } from "./gitlab/projectContext";
+import { callMergeRequestApi, formatMrGitLabActionError } from "./gitlab/mrApiRoute";
 import { VisualReviewPanel, type WebviewRequest } from "./webview/visualReviewPanel";
 import type { MergeRequestSummary } from "./gitlab/types";
 import {
@@ -42,8 +43,11 @@ import { MrEditorReviewController } from "./review/mrEditorReview";
 import { registerMrReviewInlayHints, type MrReviewInlayHintsProvider } from "./review/mrReviewInlayHints";
 import {
   navigateToQueuedComment,
+  revealMrLine,
   toggleQueuedCommentInDiff,
 } from "./review/draftCommentNavigation";
+import { fetchMrDiscussionThreads } from "./review/mrDiscussionsLoad";
+import { setMrDiscussionsRefreshHandler } from "./review/mrDiscussionsRefresh";
 import {
   registerDraftCommentThreads,
   type DraftCommentThreadController,
@@ -77,6 +81,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   setMrEditorReviewController(mrEditorReview);
   mrInlayHints = registerMrReviewInlayHints(context, () => activeSession);
   draftCommentThreads = registerDraftCommentThreads(context, () => activeSession);
+  setMrDiscussionsRefreshHandler((session) => {
+    void refreshMrDiscussionsForSession(session);
+  });
   mrReviewStatusBar = new MrReviewStatusBar(
     () => activeSession,
     (session, path) => progress.isReviewed(session.mr, path),
@@ -294,9 +301,26 @@ function syncDraftCommentUi(): void {
   mrInlayHints?.refresh();
 }
 
+async function refreshMrDiscussionsForSession(session: ReviewSession): Promise<void> {
+  const panel = VisualReviewPanel.current;
+  if (!panel || !client) {
+    return;
+  }
+  panel.setDiscussionsLoading(true);
+  try {
+    const projectId = resolveProjectIdForMr(session.mr.project_id);
+    const threads = await fetchMrDiscussionThreads(client, projectId, session.mr.iid);
+    panel.setDiscussions(threads);
+  } catch (e) {
+    const msg = e instanceof GitLabApiError ? `HTTP ${e.status}: ${e.message}` : String(e);
+    panel.setDiscussions([], msg);
+  }
+}
+
 export function deactivate(): void {
   client = undefined;
   activeSession = undefined;
+  setMrDiscussionsRefreshHandler(undefined);
   setMrEditorReviewController(undefined);
   mrEditorReview = undefined;
 }
@@ -417,11 +441,11 @@ async function startVisualReview(
     }
     let description = (mr.description ?? "").trim();
     try {
-      const full = await client.getMergeRequest(projectId, mr.iid);
+      const full = await callMergeRequestApi(mr, (pid) => client!.getMergeRequest(pid, mr.iid));
+      mr = normalizeMergeRequestSummary({ ...mr, ...full });
       description = (full.description ?? "").trim();
-      mr = { ...mr, description: full.description };
     } catch {
-      /* keep list payload description if any */
+      /* keep list payload if detail fetch fails */
     }
     const flowGraph = buildFlowGraphFromChanges(payload.changes);
     const session = createReviewSession(
@@ -452,6 +476,7 @@ async function startVisualReview(
     );
     await selectReviewFile(session, highlightPath);
     setDiffReviewOpen(false);
+    void refreshMrDiscussionsForSession(session);
     mrReviewStatusBar?.refresh();
   } catch (e) {
     const msg = e instanceof GitLabApiError ? formatGitLabError(e, mr) : String(e);
@@ -565,6 +590,26 @@ function handleVisualReviewMessage(
     return;
   } else if (msg.type === "toggleDraft" && msg.id) {
     void toggleQueuedCommentInDiff(session, msg.id, openReviewDiff, syncDraftCommentUi);
+    return;
+  } else if (msg.type === "approveMr") {
+    void approveMrForSession(session, true);
+    return;
+  } else if (msg.type === "rejectMr") {
+    void approveMrForSession(session, false);
+    return;
+  } else if (msg.type === "refreshDiscussions") {
+    void refreshMrDiscussionsForSession(session);
+    return;
+  } else if (msg.type === "goToThread" && msg.path && msg.line) {
+    const side = msg.side === "old" ? "old" : "new";
+    panel.setActivePath(msg.path);
+    void (async () => {
+      await openReviewDiff(session, msg.path);
+      await revealMrLine(session, msg.path, msg.line, side);
+    })();
+    return;
+  } else if (msg.type === "openExternalLink" && msg.href) {
+    void vscode.env.openExternal(vscode.Uri.parse(msg.href));
     return;
   } else if (msg.type === "commentLineRemoved") {
     if (msg.oldLine) {
@@ -719,31 +764,89 @@ async function commentNowFromActiveEditor(
 }
 
 async function approveMr(approve: boolean): Promise<void> {
+  if (activeSession && VisualReviewPanel.current) {
+    await approveMrForSession(activeSession, approve);
+    return;
+  }
   if (!client) {
     return;
   }
-  const mrRef = await pickMrRef();
-  if (!mrRef) {
+  const mr = await pickOpenMergeRequest();
+  if (!mr) {
     return;
   }
-  if (approve) {
-    await client.approveMr(mrRef.projectId, mrRef.iid);
-    void vscode.window.showInformationMessage("MR approved on GitLab");
-  } else {
-    await client.unapproveMr(mrRef.projectId, mrRef.iid);
-    const body = await vscode.window.showInputBox({
-      title: "Request changes (posted as MR note)",
-      prompt: "Describe required changes",
-      ignoreFocusOut: true,
-    });
-    if (body) {
-      await client.createMrNote(mrRef.projectId, mrRef.iid, `**Changes requested:** ${body}`);
-    }
-    void vscode.window.showInformationMessage("Approval removed; note posted if provided");
+  try {
+    await runMrApprovalAction(mr, mergeRequestRef(mr), approve);
+  } catch (e) {
+    void vscode.window.showErrorMessage(`Review Kit: ${formatMrGitLabActionError(e)}`);
   }
 }
 
-async function pickMrRef(): Promise<{ projectId: number; iid: number; label: string } | undefined> {
+async function approveMrForSession(session: ReviewSession, approve: boolean): Promise<void> {
+  if (!client) {
+    void vscode.window.showWarningMessage("Configure o token GitLab primeiro.");
+    return;
+  }
+  const ref = mergeRequestRef(session.mr);
+  try {
+    await runMrApprovalAction(session.mr, ref, approve);
+  } catch (e) {
+    void vscode.window.showErrorMessage(`Review Kit: ${formatMrGitLabActionError(e)}`);
+  }
+}
+
+async function runMrApprovalAction(
+  mr: MergeRequestSummary,
+  refLabel: string,
+  approve: boolean,
+): Promise<void> {
+  if (!client) {
+    return;
+  }
+  if (approve) {
+    const confirm = await vscode.window.showWarningMessage(
+      `Aprovar ${refLabel} no GitLab?`,
+      { modal: true },
+      "Aprovar",
+    );
+    if (confirm !== "Aprovar") {
+      return;
+    }
+    await callMergeRequestApi(mr, (projectId) => client!.approveMr(projectId, mr.iid));
+    void vscode.window.showInformationMessage(`Review Kit: ${refLabel} aprovado no GitLab.`);
+    return;
+  }
+  const body = await vscode.window.showInputBox({
+    title: `Rejeitar MR — ${refLabel}`,
+    prompt: "Motivo (publicado como nota no MR; remove sua aprovação se existir)",
+    ignoreFocusOut: true,
+  });
+  if (body === undefined) {
+    return;
+  }
+  await callMergeRequestApi(mr, async (projectId) => {
+    try {
+      await client!.unapproveMr(projectId, mr.iid);
+    } catch (e) {
+      if (!(e instanceof GitLabApiError && e.status === 404)) {
+        throw e;
+      }
+    }
+  });
+  const trimmed = body.trim();
+  if (trimmed) {
+    await callMergeRequestApi(mr, (projectId) =>
+      client!.createMrNote(projectId, mr.iid, `**Mudanças solicitadas:** ${trimmed}`),
+    );
+  }
+  void vscode.window.showInformationMessage(
+    trimmed
+      ? `Review Kit: ${refLabel} — aprovação removida e nota publicada.`
+      : `Review Kit: ${refLabel} — aprovação removida (ou você ainda não tinha aprovado).`,
+  );
+}
+
+async function pickOpenMergeRequest(): Promise<MergeRequestSummary | undefined> {
   if (!client) {
     return undefined;
   }
@@ -756,12 +859,11 @@ async function pickMrRef(): Promise<{ projectId: number; iid: number; label: str
     mrs.map((mr) => ({
       label: mr.references?.full ?? `!${mr.iid}`,
       description: mr.title,
-      projectId: mr.project_id,
-      iid: mr.iid,
+      mr,
     })),
-    { placeHolder: "Select merge request" },
+    { placeHolder: "Selecione o merge request" },
   );
-  return pick;
+  return pick?.mr;
 }
 
 function resolveMergeRequestForCommand(

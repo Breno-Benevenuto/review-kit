@@ -1,51 +1,46 @@
+import { marked } from "marked";
 import { escapeHtml } from "./diffPresentation";
+
+marked.setOptions({
+  gfm: true,
+  breaks: true,
+});
+
+marked.use({
+  renderer: {
+    link({ href, title, tokens }) {
+      const text = this.parser.parseInline(tokens);
+      const url = sanitizeDescriptionHref(href ?? "");
+      const titleAttr = title ? ` title="${escapeAttr(title)}"` : "";
+      return `<a href="${escapeAttr(url)}" class="md-link"${titleAttr}>${text}</a>`;
+    },
+  },
+});
 
 export function renderMrDescriptionHtml(description: string | null | undefined): string {
   const raw = (description ?? "").trim();
   if (!raw) {
     return `<p class="mr-desc-empty">Sem descrição no GitLab.</p>`;
   }
-  return `<div class="mr-description-body">${renderSimpleMarkdown(raw)}</div>`;
+  const parsed = marked.parse(raw, { async: false });
+  const html = typeof parsed === "string" ? parsed : "";
+  return `<div class="mr-description-body markdown-body">${sanitizeDescriptionHtml(html)}</div>`;
 }
 
-function renderSimpleMarkdown(source: string): string {
-  const blocks = source.split(/\n{2,}/);
-  return blocks
-    .map((block) => {
-      const trimmed = block.trim();
-      if (!trimmed) {
-        return "";
-      }
-      if (/^#{1,3}\s/.test(trimmed)) {
-        const level = trimmed.match(/^#+/)?.[0].length ?? 1;
-        const text = trimmed.replace(/^#+\s*/, "");
-        const tag = level <= 1 ? "h3" : level === 2 ? "h4" : "h5";
-        return `<${tag}>${inlineMarkdown(text)}</${tag}>`;
-      }
-      if (/^[-*]\s/m.test(trimmed)) {
-        const items = trimmed
-          .split("\n")
-          .filter((line) => /^[-*]\s/.test(line))
-          .map((line) => `<li>${inlineMarkdown(line.replace(/^[-*]\s*/, ""))}</li>`)
-          .join("");
-        return `<ul>${items}</ul>`;
-      }
-      return `<p>${trimmed
-        .split("\n")
-        .map((line) => inlineMarkdown(line))
-        .join("<br/>")}</p>`;
-    })
-    .filter(Boolean)
-    .join("");
+function sanitizeDescriptionHref(href: string): string {
+  const trimmed = href.trim();
+  if (!trimmed || /^javascript:/i.test(trimmed) || /^data:/i.test(trimmed)) {
+    return "#";
+  }
+  return trimmed;
 }
 
-function inlineMarkdown(text: string): string {
-  let out = escapeHtml(text);
-  out = out.replace(/`([^`]+)`/g, "<code>$1</code>");
-  out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_m, label, url) => {
-    const safeUrl = escapeHtml(String(url));
-    return `<a href="${safeUrl}" title="${safeUrl}">${label}</a>`;
-  });
-  return out;
+function escapeAttr(value: string): string {
+  return escapeHtml(value).replace(/"/g, "&quot;");
+}
+
+function sanitizeDescriptionHtml(html: string): string {
+  return html
+    .replace(/<script[\s\S]*?>[\s\S]*?<\/script>/gi, "")
+    .replace(/\son\w+\s*=\s*("[^"]*"|'[^']*'|[^\s>]+)/gi, "");
 }

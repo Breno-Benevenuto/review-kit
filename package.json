@@ -2,7 +2,7 @@
   "name": "review-kit",
   "displayName": "Review Kit",
   "description": "Guided GitLab merge request code review in Cursor",
-  "version": "0.2.3",
+  "version": "0.2.7",
   "publisher": "review-kit",
   "icon": "media/icon.png",
   "repository": {
@@ -128,11 +128,11 @@
       },
       {
         "command": "reviewKit.approveMr",
-        "title": "Review Kit: Approve Merge Request"
+        "title": "Review Kit: Aprovar MR"
       },
       {
         "command": "reviewKit.requestChanges",
-        "title": "Review Kit: Request Changes on MR"
+        "title": "Review Kit: Rejeitar / solicitar mudanças no MR"
       },
       {
         "command": "reviewKit.reviewPrevFile",
@@ -311,6 +311,7 @@
     "test": "node scripts/self-check.mjs"
   },
   "dependencies": {
+    "marked": "^15.0.12",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "reactflow": "^11.11.4"

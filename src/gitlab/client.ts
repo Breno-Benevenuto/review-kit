@@ -1,4 +1,5 @@
 import type {
+  GitLabDiscussion,
   MergeRequestChanges,
   MergeRequestSummary,
 } from "./types";
@@ -86,6 +87,26 @@ export class GitLabClient {
   async validateToken(): Promise<{ username: string }> {
     const user = await this.request<{ username: string }>("/user");
     return { username: user.username };
+  }
+
+  async getCurrentUser(): Promise<{ id: number; username: string; name: string }> {
+    return this.request("/user");
+  }
+
+  async listMergeRequestDiscussions(projectId: number, mrIid: number): Promise<GitLabDiscussion[]> {
+    const all: GitLabDiscussion[] = [];
+    for (let page = 1; page <= 30; page++) {
+      const batch = await this.request<GitLabDiscussion[]>(
+        `/projects/${projectId}/merge_requests/${mrIid}/discussions`,
+        undefined,
+        { per_page: 100, page },
+      );
+      all.push(...batch);
+      if (batch.length < 100) {
+        break;
+      }
+    }
+    return all;
   }
 
   async resolveProject(projectPath: string): Promise<GitLabProjectRef> {
@@ -198,10 +219,18 @@ export class GitLabClient {
   }
 
   async approveMr(projectId: number, mrIid: number): Promise<void> {
-    await this.request(`/projects/${projectId}/merge_requests/${mrIid}/approve`, { method: "POST" });
+    await this.postMrAction(`/projects/${projectId}/merge_requests/${mrIid}/approve`);
   }
 
   async unapproveMr(projectId: number, mrIid: number): Promise<void> {
-    await this.request(`/projects/${projectId}/merge_requests/${mrIid}/unapprove`, { method: "POST" });
+    await this.postMrAction(`/projects/${projectId}/merge_requests/${mrIid}/unapprove`);
+  }
+
+  private async postMrAction(path: string): Promise<void> {
+    await this.request(path, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+    });
   }
 }
