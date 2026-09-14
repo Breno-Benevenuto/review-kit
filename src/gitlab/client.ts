@@ -2,11 +2,22 @@ import type {
   MergeRequestChanges,
   MergeRequestSummary,
 } from "./types";
+import { normalizeMergeRequestSummary } from "./normalizeMr";
+
+export type GitLabProjectRef = {
+  id: number;
+  path_with_namespace: string;
+};
+
+export function filterOpenMergeRequests(mrs: MergeRequestSummary[]): MergeRequestSummary[] {
+  return mrs.filter((mr) => mr.state === "opened");
+}
 
 export class GitLabApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly apiPath?: string,
   ) {
     super(message);
     this.name = "GitLabApiError";
@@ -30,18 +41,41 @@ export class GitLabClient {
     return u.toString();
   }
 
+  private async fetchWithAuth(url: string, init?: RequestInit): Promise<Response> {
+    let current = url;
+    for (let hop = 0; hop < 6; hop++) {
+      const res = await fetch(current, {
+        ...init,
+        redirect: "manual",
+        headers: {
+          "PRIVATE-TOKEN": this.token,
+          ...(init?.headers ?? {}),
+        },
+      });
+      if (res.status >= 300 && res.status < 400) {
+        const location = res.headers.get("location");
+        if (!location) {
+          return res;
+        }
+        current = new URL(location, current).toString();
+        continue;
+      }
+      return res;
+    }
+    throw new GitLabApiError("Too many GitLab redirects", 310);
+  }
+
   private async request<T>(path: string, init?: RequestInit, query?: Record<string, string | number | boolean>): Promise<T> {
-    const res = await fetch(this.url(path, query), {
+    const res = await this.fetchWithAuth(this.url(path, query), {
       ...init,
       headers: {
-        "PRIVATE-TOKEN": this.token,
         Accept: "application/json",
         ...(init?.headers ?? {}),
       },
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");
-      throw new GitLabApiError(body || res.statusText, res.status);
+      throw new GitLabApiError(body || res.statusText, res.status, path);
     }
     if (res.status === 204) {
       return undefined as T;
@@ -54,30 +88,62 @@ export class GitLabClient {
     return { username: user.username };
   }
 
-  async listOpenMergeRequests(): Promise<MergeRequestSummary[]> {
-    return this.request<MergeRequestSummary[]>("/merge_requests", undefined, {
-      state: "opened",
-      scope: "all",
-      per_page: 50,
-      order_by: "updated_at",
-      sort: "desc",
-    });
+  async resolveProject(projectPath: string): Promise<GitLabProjectRef> {
+    return this.request<GitLabProjectRef>(`/projects/${encodeURIComponent(projectPath)}`);
+  }
+
+  async listOpenMergeRequestsForProject(projectId: number): Promise<MergeRequestSummary[]> {
+    const raw = await this.request<MergeRequestSummary[]>(
+      `/projects/${projectId}/merge_requests`,
+      undefined,
+      {
+        state: "opened",
+        per_page: 50,
+        order_by: "updated_at",
+        sort: "desc",
+      },
+    );
+    return filterOpenMergeRequests(raw).map((mr) => normalizeMergeRequestSummary(mr));
+  }
+
+  async getMergeRequest(projectId: number, mrIid: number): Promise<MergeRequestSummary> {
+    const raw = await this.request<MergeRequestSummary>(
+      `/projects/${projectId}/merge_requests/${mrIid}`,
+    );
+    return normalizeMergeRequestSummary(raw);
   }
 
   async getMergeRequestChanges(projectId: number, mrIid: number): Promise<MergeRequestChanges> {
     return this.request<MergeRequestChanges>(
-      `/projects/${encodeURIComponent(String(projectId))}/merge_requests/${mrIid}/changes`,
+      `/projects/${projectId}/merge_requests/${mrIid}/changes`,
     );
   }
 
+  async getMergeRequestChangesWithFallback(
+    mrProjectId: number,
+    mrIid: number,
+    workspaceProjectId?: number,
+  ): Promise<MergeRequestChanges> {
+    try {
+      return await this.getMergeRequestChanges(mrProjectId, mrIid);
+    } catch (e) {
+      if (
+        e instanceof GitLabApiError &&
+        e.status === 404 &&
+        workspaceProjectId !== undefined &&
+        workspaceProjectId > 0 &&
+        workspaceProjectId !== mrProjectId
+      ) {
+        return this.getMergeRequestChanges(workspaceProjectId, mrIid);
+      }
+      throw e;
+    }
+  }
+
   async getFileRaw(projectId: number, filePath: string, ref: string): Promise<string> {
-    const encodedProject = encodeURIComponent(String(projectId));
     const encodedPath = encodeURIComponent(filePath);
-    const res = await fetch(
-      this.url(`/projects/${encodedProject}/repository/files/${encodedPath}/raw`, { ref }),
-      {
-        headers: { "PRIVATE-TOKEN": this.token },
-      },
+    const res = await this.fetchWithAuth(
+      this.url(`/projects/${projectId}/repository/files/${encodedPath}/raw`, { ref }),
     );
     if (res.status === 404) {
       return "";
@@ -89,27 +155,53 @@ export class GitLabClient {
   }
 
   async createMrNote(projectId: number, mrIid: number, body: string): Promise<void> {
-    await this.request(
-      `/projects/${encodeURIComponent(String(projectId))}/merge_requests/${mrIid}/notes`,
-      {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ body }),
-      },
-    );
+    await this.request(`/projects/${projectId}/merge_requests/${mrIid}/notes`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body }),
+    });
+  }
+
+  async createMrDiscussion(
+    projectId: number,
+    mrIid: number,
+    body: string,
+    position: {
+      base_sha: string;
+      start_sha: string;
+      head_sha: string;
+      old_path: string;
+      new_path: string;
+      new_line?: number;
+      old_line?: number;
+    },
+  ): Promise<void> {
+    const pos: Record<string, string | number> = {
+      position_type: "text",
+      base_sha: position.base_sha,
+      start_sha: position.start_sha,
+      head_sha: position.head_sha,
+      old_path: position.old_path,
+      new_path: position.new_path,
+    };
+    if (position.new_line !== undefined) {
+      pos.new_line = position.new_line;
+    }
+    if (position.old_line !== undefined) {
+      pos.old_line = position.old_line;
+    }
+    await this.request(`/projects/${projectId}/merge_requests/${mrIid}/discussions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body, position: pos }),
+    });
   }
 
   async approveMr(projectId: number, mrIid: number): Promise<void> {
-    await this.request(
-      `/projects/${encodeURIComponent(String(projectId))}/merge_requests/${mrIid}/approve`,
-      { method: "POST" },
-    );
+    await this.request(`/projects/${projectId}/merge_requests/${mrIid}/approve`, { method: "POST" });
   }
 
   async unapproveMr(projectId: number, mrIid: number): Promise<void> {
-    await this.request(
-      `/projects/${encodeURIComponent(String(projectId))}/merge_requests/${mrIid}/unapprove`,
-      { method: "POST" },
-    );
+    await this.request(`/projects/${projectId}/merge_requests/${mrIid}/unapprove`, { method: "POST" });
   }
 }

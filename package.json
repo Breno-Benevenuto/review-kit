@@ -2,8 +2,20 @@
   "name": "review-kit",
   "displayName": "Review Kit",
   "description": "Guided GitLab merge request code review in Cursor",
-  "version": "0.1.0",
+  "version": "0.2.3",
   "publisher": "review-kit",
+  "icon": "media/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Breno-Benevenuto/review-kit.git"
+  },
+  "license": "MIT",
+  "keywords": [
+    "gitlab",
+    "merge request",
+    "code review",
+    "diff"
+  ],
   "engines": {
     "vscode": "^1.85.0"
   },
@@ -20,8 +32,34 @@
           "type": "string",
           "default": "https://gitlab.com",
           "description": "GitLab instance base URL (no trailing slash)."
+        },
+        "reviewKit.projectPath": {
+          "type": "string",
+          "default": "",
+          "description": "GitLab project path (group/repo). Empty = infer from git remote origin of the open workspace folder."
+        },
+        "reviewKit.diffInline": {
+          "type": "boolean",
+          "default": false,
+          "description": "Open diff in inline (unified) mode in the editor instead of side-by-side."
+        },
+        "reviewKit.autoOpenEditorDiff": {
+          "type": "boolean",
+          "default": false,
+          "description": "Deprecated: diff opens on double-click or via toolbar. Kept for compatibility."
+        },
+        "reviewKit.openProjectEditorForNavigation": {
+          "type": "boolean",
+          "default": true,
+          "description": "Ao abrir o diff, abre também o arquivo do MR em aba normal (Go to Definition, métodos, LSP)."
         }
       }
+    },
+    "configurationDefaults": {
+      "editor.semanticHighlighting.enabled": true,
+      "editor.bracketPairColorization.enabled": true,
+      "editor.inlayHints.enabled": "on",
+      "diffEditor.renderSideBySide": true
     },
     "viewsContainers": {
       "activitybar": [
@@ -54,8 +92,12 @@
         "title": "Review Kit: Refresh Merge Requests"
       },
       {
-        "command": "reviewKit.openFlowGraph",
-        "title": "Review Kit: Open Review Flow Graph"
+        "command": "reviewKit.openVisualReview",
+        "title": "Review Kit: Abrir revisão visual do MR"
+      },
+      {
+        "command": "reviewKit.openMrFileDiff",
+        "title": "Review Kit: Abrir diff do arquivo"
       },
       {
         "command": "reviewKit.toggleFileReviewed",
@@ -63,7 +105,26 @@
       },
       {
         "command": "reviewKit.postComment",
-        "title": "Review Kit: Post MR Comment"
+        "title": "Review Kit: Comentar no MR (GitLab)"
+      },
+      {
+        "command": "reviewKit.commentOnLine",
+        "title": "Review Kit: Comentar na linha (caixa Salvar / Enviar)"
+      },
+      {
+        "command": "reviewKit.openCommentComposer",
+        "title": "Review Kit: Caixa de comentário",
+        "enablement": "reviewKit.mrReviewActive"
+      },
+      {
+        "command": "reviewKit.commentOnLineAt",
+        "title": "Review Kit: Thread GitLab nesta linha",
+        "enablement": "reviewKit.mrReviewActive"
+      },
+      {
+        "command": "reviewKit.commentMrFromReview",
+        "title": "Review Kit: Nota geral no MR (arquivo aberto)",
+        "enablement": "reviewKit.mrReviewActive"
       },
       {
         "command": "reviewKit.approveMr",
@@ -72,6 +133,88 @@
       {
         "command": "reviewKit.requestChanges",
         "title": "Review Kit: Request Changes on MR"
+      },
+      {
+        "command": "reviewKit.reviewPrevFile",
+        "title": "Review Kit: Arquivo anterior (diff)",
+        "enablement": "reviewKit.mrReviewActive"
+      },
+      {
+        "command": "reviewKit.reviewNextFile",
+        "title": "Review Kit: Próximo arquivo (diff)",
+        "enablement": "reviewKit.mrReviewActive"
+      },
+      {
+        "command": "reviewKit.toggleReviewedInDiff",
+        "title": "Review Kit: Marcar / desmarcar revisado",
+        "enablement": "reviewKit.mrReviewActive"
+      },
+      {
+        "command": "reviewKit.startReview",
+        "title": "Review Kit: Comentar na linha do cursor"
+      },
+      {
+        "command": "reviewKit.commentNow",
+        "title": "Review Kit: Comentar na linha do cursor",
+        "enablement": "reviewKit.mrReviewActive"
+      },
+      {
+        "command": "reviewKit.submitAllDrafts",
+        "title": "Review Kit: Enviar fila de comentários"
+      },
+      {
+        "command": "reviewKit.cancelReviewDrafts",
+        "title": "Review Kit: Descartar fila de comentários"
+      },
+      {
+        "command": "reviewKit.goToDraftComment",
+        "title": "Review Kit: Ir ao comentário na fila"
+      },
+      {
+        "command": "reviewKit.toggleDraftCommentInDiff",
+        "title": "Review Kit: Abrir/fechar comentário da fila no diff"
+      },
+      {
+        "command": "reviewKit.diffNextChange",
+        "title": "Review Kit: Próxima alteração no diff",
+        "enablement": "reviewKit.mrReviewActive"
+      },
+      {
+        "command": "reviewKit.diffPrevChange",
+        "title": "Review Kit: Alteração anterior no diff",
+        "enablement": "reviewKit.mrReviewActive"
+      }
+    ],
+    "keybindings": [
+      {
+        "command": "reviewKit.reviewNextFile",
+        "key": "alt+arrowright",
+        "when": "reviewKit.mrReviewActive && editorTextFocus"
+      },
+      {
+        "command": "reviewKit.reviewPrevFile",
+        "key": "alt+arrowleft",
+        "when": "reviewKit.mrReviewActive && editorTextFocus"
+      },
+      {
+        "command": "reviewKit.toggleReviewedInDiff",
+        "key": "alt+enter",
+        "when": "reviewKit.mrReviewActive && editorTextFocus"
+      },
+      {
+        "command": "reviewKit.commentOnLine",
+        "key": "alt+shift+g",
+        "when": "reviewKit.mrReviewActive && editorTextFocus"
+      },
+      {
+        "command": "reviewKit.diffNextChange",
+        "key": "alt+pagedown",
+        "when": "reviewKit.mrReviewActive && editorTextFocus"
+      },
+      {
+        "command": "reviewKit.diffPrevChange",
+        "key": "alt+pageup",
+        "when": "reviewKit.mrReviewActive && editorTextFocus"
       }
     ],
     "menus": {
@@ -82,16 +225,74 @@
           "group": "navigation"
         },
         {
+          "command": "reviewKit.postComment",
+          "when": "view == reviewKit.mrs",
+          "group": "navigation"
+        },
+        {
           "command": "reviewKit.configureToken",
           "when": "view == reviewKit.mrs",
           "group": "navigation"
         }
       ],
+      "editor/context": [
+        {
+          "command": "reviewKit.toggleReviewedInDiff",
+          "when": "reviewKit.mrReviewActive",
+          "group": "reviewKit@0"
+        },
+        {
+          "command": "reviewKit.commentMrFromReview",
+          "when": "reviewKit.mrReviewActive",
+          "group": "reviewKit@1"
+        }
+      ],
+      "editor/gutter/context": [
+        {
+          "command": "reviewKit.commentOnLine",
+          "when": "reviewKit.mrReviewActive",
+          "group": "reviewKit@1"
+        }
+      ],
+      "editor/lineNumber/context": [
+        {
+          "command": "reviewKit.commentOnLine",
+          "when": "reviewKit.mrReviewActive",
+          "group": "reviewKit@1"
+        }
+      ],
+      "editor/title": [
+        {
+          "command": "reviewKit.reviewPrevFile",
+          "when": "reviewKit.mrReviewActive",
+          "group": "navigation@0"
+        },
+        {
+          "command": "reviewKit.reviewNextFile",
+          "when": "reviewKit.mrReviewActive",
+          "group": "navigation@0"
+        },
+        {
+          "command": "reviewKit.toggleReviewedInDiff",
+          "when": "reviewKit.mrReviewActive",
+          "group": "navigation@0"
+        },
+        {
+          "command": "reviewKit.commentMrFromReview",
+          "when": "reviewKit.mrReviewActive",
+          "group": "navigation@1"
+        }
+      ],
       "view/item/context": [
         {
-          "command": "reviewKit.openFlowGraph",
+          "command": "reviewKit.openVisualReview",
           "when": "view == reviewKit.mrs && viewItem == mr",
           "group": "inline"
+        },
+        {
+          "command": "reviewKit.openMrFileDiff",
+          "when": "view == reviewKit.mrs && viewItem == changedFile",
+          "group": "inline@1"
         },
         {
           "command": "reviewKit.toggleFileReviewed",
@@ -105,6 +306,7 @@
     "compile": "node esbuild.mjs && node esbuild.webview.mjs",
     "watch": "node esbuild.mjs --watch",
     "package": "npm run compile && vsce package --no-dependencies",
+    "install:cursor": "node scripts/install-cursor.mjs",
     "lint": "tsc --noEmit",
     "test": "node scripts/self-check.mjs"
   },
@@ -116,6 +318,7 @@
   "devDependencies": {
     "@types/node": "^20.14.0",
     "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.9.2",
     "esbuild": "^0.21.5",
     "typescript": "^5.5.0"
   }

@@ -1,6 +1,7 @@
 const LAYER_PATTERNS: { layer: string; pattern: RegExp }[] = [
   { layer: "controller", pattern: /(^|[/\\])controllers?([/\\]|$)/i },
   { layer: "controller", pattern: /(^|[/\\])api([/\\]|$)/i },
+  { layer: "flow", pattern: /(^|[/\\])flows?([/\\]|$)/i },
   { layer: "service", pattern: /(^|[/\\])services?([/\\]|$)/i },
   { layer: "repository", pattern: /(^|[/\\])repositories?([/\\]|$)/i },
   { layer: "repository", pattern: /(^|[/\\])dao([/\\]|$)/i },
@@ -12,12 +13,13 @@ const LAYER_PATTERNS: { layer: string; pattern: RegExp }[] = [
 
 const LAYER_RANK: Record<string, number> = {
   controller: 0,
-  dto: 1,
-  service: 2,
-  repository: 3,
-  model: 4,
-  config: 5,
-  other: 6,
+  flow: 1,
+  dto: 2,
+  service: 3,
+  repository: 4,
+  model: 5,
+  config: 6,
+  other: 7,
 };
 
 export function classifyLayer(filePath: string): string {
@@ -103,10 +105,21 @@ export async function buildDependencyEdges(
   paths: string[],
   readFile: (path: string) => Promise<string>,
 ): Promise<{ source: string; target: string }[]> {
+  const contents = new Map<string, string>();
+  for (const path of paths) {
+    contents.set(path, await readFile(path));
+  }
+  return buildDependencyEdgesSync(paths, (p) => contents.get(p) ?? "");
+}
+
+export function buildDependencyEdgesSync(
+  paths: string[],
+  readFile: (path: string) => string,
+): { source: string; target: string }[] {
   const known = new Set(paths);
   const edges: { source: string; target: string }[] = [];
   for (const path of paths) {
-    const content = await readFile(path);
+    const content = readFile(path);
     for (const spec of extractImports(content)) {
       const target = resolveImport(path, spec, known);
       if (target && target !== path) {

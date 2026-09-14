@@ -5,8 +5,15 @@
       "name": "Run Extension",
       "type": "extensionHost",
       "request": "launch",
-      "args": ["--extensionDevelopmentPath=${workspaceFolder}"],
-      "outFiles": ["${workspaceFolder}/dist/**/*.js"]
+      "args": [
+        "--extensionDevelopmentPath=${workspaceFolder}",
+        "--disable-extensions"
+      ],
+      "outFiles": ["${workspaceFolder}/dist/**/*.js"],
+      "envFile": "${userHome}/.cursor/.env.cursor",
+      "env": {
+        "GITLAB_TOKEN": "${env:GITLAB_TOKEN}"
+      }
     }
   ]
 }

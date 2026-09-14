@@ -10,10 +10,13 @@ export type MergeRequestSummary = {
   project_id: number;
   title: string;
   web_url: string;
+  state: string;
+  draft?: boolean;
   references: { full: string };
   author: GitLabUser;
   source_branch: string;
   target_branch: string;
+  description?: string | null;
 };
 
 export type MergeRequestChange = {
