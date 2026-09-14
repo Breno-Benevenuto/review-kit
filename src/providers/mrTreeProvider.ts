@@ -99,6 +99,19 @@ export class MrTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
 
   async getChildren(element?: vscode.TreeItem): Promise<vscode.TreeItem[]> {
     if (!element) {
+      if (!this.getClient()) {
+        const signIn = new vscode.TreeItem("Entrar com SSO (OAuth)");
+        signIn.iconPath = new vscode.ThemeIcon("sign-in");
+        signIn.contextValue = "authAction";
+        signIn.command = { command: "reviewKit.signInGitLab", title: "Entrar no GitLab" };
+
+        const pat = new vscode.TreeItem("Colar token (PAT)");
+        pat.iconPath = new vscode.ThemeIcon("key");
+        pat.contextValue = "authAction";
+        pat.command = { command: "reviewKit.configureToken", title: "Configure GitLab Token" };
+
+        return [signIn, pat];
+      }
       if (this.mergeRequests.length === 0) {
         const hintText =
           this.projectHint ??

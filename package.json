@@ -2,7 +2,7 @@
   "name": "review-kit",
   "displayName": "Review Kit",
   "description": "Guided GitLab merge request code review in Cursor",
-  "version": "0.2.9",
+  "version": "0.2.10",
   "publisher": "review-kit",
   "icon": "media/icon.png",
   "repository": {
@@ -95,6 +95,12 @@
         }
       ]
     },
+    "viewsWelcome": [
+      {
+        "view": "reviewKit.mrs",
+        "contents": "Conecte ao GitLab para ver os MRs.\n\n[$(sign-in) Entrar com SSO](command:reviewKit.signInGitLab)\n\n[$(key) Colar token PAT](command:reviewKit.configureToken)\n\nConfira `reviewKit.gitlabUrl` se não for gitlab.com."
+      }
+    ],
     "views": {
       "review-kit": [
         {
@@ -110,11 +116,13 @@
     "commands": [
       {
         "command": "reviewKit.signInGitLab",
-        "title": "Review Kit: Entrar no GitLab (OAuth/SSO)"
+        "title": "Entrar (SSO)",
+        "icon": "$(sign-in)"
       },
       {
         "command": "reviewKit.configureToken",
-        "title": "Review Kit: Configure GitLab Token (PAT)"
+        "title": "Token (PAT)",
+        "icon": "$(key)"
       },
       {
         "command": "reviewKit.refreshMrs",
@@ -253,24 +261,24 @@
     "menus": {
       "view/title": [
         {
-          "command": "reviewKit.refreshMrs",
-          "when": "view == reviewKit.mrs",
-          "group": "navigation"
-        },
-        {
-          "command": "reviewKit.postComment",
-          "when": "view == reviewKit.mrs",
-          "group": "navigation"
-        },
-        {
           "command": "reviewKit.signInGitLab",
           "when": "view == reviewKit.mrs",
-          "group": "navigation"
+          "group": "navigation@0"
         },
         {
           "command": "reviewKit.configureToken",
           "when": "view == reviewKit.mrs",
-          "group": "navigation"
+          "group": "navigation@0"
+        },
+        {
+          "command": "reviewKit.refreshMrs",
+          "when": "view == reviewKit.mrs",
+          "group": "navigation@1"
+        },
+        {
+          "command": "reviewKit.postComment",
+          "when": "view == reviewKit.mrs",
+          "group": "navigation@1"
         }
       ],
       "editor/context": [

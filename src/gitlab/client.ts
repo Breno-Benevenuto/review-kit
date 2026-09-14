@@ -28,8 +28,19 @@ export class GitLabApiError extends Error {
 export class GitLabClient {
   constructor(
     private readonly baseUrl: string,
-    private readonly token: string,
-  ) {}
+    token: string,
+  ) {
+    this.token = token.trim();
+  }
+
+  private readonly token: string;
+
+  private authHeaders(mode: "bearer" | "private-token"): Record<string, string> {
+    if (mode === "bearer") {
+      return { Authorization: `Bearer ${this.token}` };
+    }
+    return { "PRIVATE-TOKEN": this.token };
+  }
 
   private url(path: string, query?: Record<string, string | number | boolean>): string {
     const normalized = this.baseUrl.replace(/\/$/, "");
@@ -42,14 +53,18 @@ export class GitLabClient {
     return u.toString();
   }
 
-  private async fetchWithAuth(url: string, init?: RequestInit): Promise<Response> {
+  private async fetchWithAuth(
+    url: string,
+    init?: RequestInit,
+    authMode: "bearer" | "private-token" = "bearer",
+  ): Promise<Response> {
     let current = url;
     for (let hop = 0; hop < 6; hop++) {
       const res = await fetch(current, {
         ...init,
         redirect: "manual",
         headers: {
-          "PRIVATE-TOKEN": this.token,
+          ...this.authHeaders(authMode),
           ...(init?.headers ?? {}),
         },
       });
@@ -67,13 +82,15 @@ export class GitLabClient {
   }
 
   private async request<T>(path: string, init?: RequestInit, query?: Record<string, string | number | boolean>): Promise<T> {
-    const res = await this.fetchWithAuth(this.url(path, query), {
-      ...init,
-      headers: {
-        Accept: "application/json",
-        ...(init?.headers ?? {}),
-      },
-    });
+    const url = this.url(path, query);
+    const headers = {
+      Accept: "application/json",
+      ...(init?.headers ?? {}),
+    };
+    let res = await this.fetchWithAuth(url, { ...init, headers }, "bearer");
+    if (res.status === 401) {
+      res = await this.fetchWithAuth(url, { ...init, headers }, "private-token");
+    }
     if (!res.ok) {
       const body = await res.text().catch(() => "");
       throw new GitLabApiError(body || res.statusText, res.status, path);
