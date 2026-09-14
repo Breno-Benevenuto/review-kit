@@ -1,0 +1,122 @@
+{
+  "name": "review-kit",
+  "displayName": "Review Kit",
+  "description": "Guided GitLab merge request code review in Cursor",
+  "version": "0.1.0",
+  "publisher": "review-kit",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [],
+  "main": "./dist/extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "Review Kit",
+      "properties": {
+        "reviewKit.gitlabUrl": {
+          "type": "string",
+          "default": "https://gitlab.com",
+          "description": "GitLab instance base URL (no trailing slash)."
+        }
+      }
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "review-kit",
+          "title": "Review Kit",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "review-kit": [
+        {
+          "id": "reviewKit.mrs",
+          "name": "Merge Requests"
+        },
+        {
+          "id": "reviewKit.reviewProgress",
+          "name": "Review Progress"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "reviewKit.configureToken",
+        "title": "Review Kit: Configure GitLab Token"
+      },
+      {
+        "command": "reviewKit.refreshMrs",
+        "title": "Review Kit: Refresh Merge Requests"
+      },
+      {
+        "command": "reviewKit.openFlowGraph",
+        "title": "Review Kit: Open Review Flow Graph"
+      },
+      {
+        "command": "reviewKit.toggleFileReviewed",
+        "title": "Review Kit: Toggle File Reviewed"
+      },
+      {
+        "command": "reviewKit.postComment",
+        "title": "Review Kit: Post MR Comment"
+      },
+      {
+        "command": "reviewKit.approveMr",
+        "title": "Review Kit: Approve Merge Request"
+      },
+      {
+        "command": "reviewKit.requestChanges",
+        "title": "Review Kit: Request Changes on MR"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "reviewKit.refreshMrs",
+          "when": "view == reviewKit.mrs",
+          "group": "navigation"
+        },
+        {
+          "command": "reviewKit.configureToken",
+          "when": "view == reviewKit.mrs",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "reviewKit.openFlowGraph",
+          "when": "view == reviewKit.mrs && viewItem == mr",
+          "group": "inline"
+        },
+        {
+          "command": "reviewKit.toggleFileReviewed",
+          "when": "view == reviewKit.mrs && viewItem == changedFile",
+          "group": "inline"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "compile": "node esbuild.mjs && node esbuild.webview.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "package": "npm run compile && vsce package --no-dependencies",
+    "lint": "tsc --noEmit",
+    "test": "node scripts/self-check.mjs"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "reactflow": "^11.11.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.85.0",
+    "esbuild": "^0.21.5",
+    "typescript": "^5.5.0"
+  }
+}

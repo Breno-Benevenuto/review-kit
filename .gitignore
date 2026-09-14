@@ -1,0 +1,8 @@
+node_modules
+dist
+media/graphView.js
+media/graphView.css
+**/*.map
+*.vsix
+.DS_Store
+out
