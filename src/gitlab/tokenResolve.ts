@@ -5,10 +5,12 @@ import * as vscode from "vscode";
 
 const TOKEN_KEY = "reviewKit.gitlabToken";
 
+export const DEFAULT_GITLAB_URL = "https://gitlab.com";
+
 export function gitlabBaseUrl(): string {
   return (
     vscode.workspace.getConfiguration("reviewKit").get<string>("gitlabUrl") ??
-    "https://gitlab.com"
+    DEFAULT_GITLAB_URL
   );
 }
 

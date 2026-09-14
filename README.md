@@ -99,7 +99,7 @@ npm run install:cursor
 1. **Command Palette** → `Review Kit: Configure GitLab Token`  
    - Token com `read_api`; comentários/approve exigem escopos de escrita conforme sua política GitLab.
 
-2. Ajuste a URL se não for o default Inter:
+2. (Opcional) GitLab self-managed — defina a URL base:
 
 ```json
 {
@@ -186,7 +186,7 @@ Comandos de diff/comentário exigem contexto `reviewKit.mrReviewActive` (diff ou
 
 | Setting | Default | Descrição |
 |---------|---------|-----------|
-| `reviewKit.gitlabUrl` | URL Inter | Base do GitLab (sem `/` final) |
+| `reviewKit.gitlabUrl` | `https://gitlab.com` | Base do GitLab (sem `/` final) |
 | `reviewKit.projectPath` | `""` | `group/repo`; vazio = origin do workspace |
 | `reviewKit.diffInline` | `false` | Diff unificado (inline) vs side-by-side |
 | `reviewKit.openProjectEditorForNavigation` | `true` | Abre cópia do arquivo ao lado do diff para LSP/Go to Definition |
@@ -204,7 +204,7 @@ node scripts/self-check.mjs
 
 Debug: **Run Extension** em `.vscode/launch.json` (F5) ou reinstale com `npm run install:cursor`.
 
-Plano de produto original: [`docs/plugin-code-review-plano.md`](docs/plugin-code-review-plano.md).
+Token para debug: variável `GITLAB_TOKEN`, Secret Storage da extensão, ou arquivo local `~/.cursor/.env.cursor` (não versionado).
 
 ---
 

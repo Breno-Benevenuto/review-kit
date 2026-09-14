@@ -31,7 +31,7 @@
         "reviewKit.gitlabUrl": {
           "type": "string",
           "default": "https://gitlab.com",
-          "description": "GitLab instance base URL (no trailing slash)."
+          "description": "GitLab instance base URL (no trailing slash). Use your self-managed URL if not gitlab.com."
         },
         "reviewKit.projectPath": {
           "type": "string",

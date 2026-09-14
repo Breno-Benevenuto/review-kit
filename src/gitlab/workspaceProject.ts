@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { gitlabBaseUrl } from "./tokenResolve";
 
 const execFileAsync = promisify(execFile);
 
@@ -31,13 +32,6 @@ export async function resolveWorkspaceGitLabProject(): Promise<WorkspaceGitLabPr
   }
 
   return { path, folderName: folder.name };
-}
-
-function gitlabBaseUrl(): string {
-  return (
-    vscode.workspace.getConfiguration("reviewKit").get<string>("gitlabUrl") ??
-    "https://gitlab.com"
-  );
 }
 
 async function readOriginRemote(repoPath: string): Promise<string | undefined> {
