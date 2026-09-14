@@ -2,7 +2,7 @@
   "name": "review-kit",
   "displayName": "Review Kit",
   "description": "Guided GitLab merge request code review in Cursor",
-  "version": "0.2.7",
+  "version": "0.2.8",
   "publisher": "review-kit",
   "icon": "media/icon.png",
   "repository": {
@@ -52,6 +52,11 @@
           "type": "boolean",
           "default": true,
           "description": "Ao abrir o diff, abre também o arquivo do MR em aba normal (Go to Definition, métodos, LSP)."
+        },
+        "reviewKit.preferGitLabTokenFromEnv": {
+          "type": "boolean",
+          "default": true,
+          "description": "Preferir GITLAB_TOKEN (variável de ambiente ou ~/.cursor/.env.cursor) antes do token salvo em Configure GitLab Token."
         }
       }
     },
@@ -90,6 +95,10 @@
       {
         "command": "reviewKit.refreshMrs",
         "title": "Review Kit: Refresh Merge Requests"
+      },
+      {
+        "command": "reviewKit.reloadGitLabToken",
+        "title": "Review Kit: Recarregar token GitLab (GITLAB_TOKEN)"
       },
       {
         "command": "reviewKit.openVisualReview",

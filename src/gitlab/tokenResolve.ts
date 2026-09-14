@@ -7,6 +7,8 @@ const TOKEN_KEY = "reviewKit.gitlabToken";
 
 export const DEFAULT_GITLAB_URL = "https://gitlab.com";
 
+export type GitLabTokenSource = "env" | "env-file" | "secret-storage" | "none";
+
 export function gitlabBaseUrl(): string {
   return (
     vscode.workspace.getConfiguration("reviewKit").get<string>("gitlabUrl") ??
@@ -15,19 +17,27 @@ export function gitlabBaseUrl(): string {
 }
 
 export function readGitLabTokenFromCursorEnvFile(): string | undefined {
+  const candidates = [
+    path.join(os.homedir(), ".cursor", ".env.cursor"),
+    path.join(os.homedir(), ".cursor", ".env"),
+  ];
+  for (const file of candidates) {
+    const token = parseGitLabTokenFromEnvFile(file);
+    if (token) {
+      return token;
+    }
+  }
+  return undefined;
+}
+
+function parseGitLabTokenFromEnvFile(filePath: string): string | undefined {
   try {
-    const file = path.join(os.homedir(), ".cursor", ".env.cursor");
-    const text = fs.readFileSync(file, "utf8");
+    const text = fs.readFileSync(filePath, "utf8");
     for (const line of text.split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#")) {
-        continue;
+      const token = parseGitLabTokenLine(line);
+      if (token) {
+        return token;
       }
-      const match = trimmed.match(/^(?:export\s+)?GITLAB_TOKEN=(.+)$/);
-      if (!match) {
-        continue;
-      }
-      return match[1].replace(/^["']|["']$/g, "").trim();
     }
   } catch {
     return undefined;
@@ -35,15 +45,56 @@ export function readGitLabTokenFromCursorEnvFile(): string | undefined {
   return undefined;
 }
 
-export async function resolveGitLabToken(context: vscode.ExtensionContext): Promise<string | undefined> {
-  const stored = await context.secrets.get(TOKEN_KEY);
+function parseGitLabTokenLine(line: string): string | undefined {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith("#")) {
+    return undefined;
+  }
+  const match = trimmed.match(/^(?:export\s+)?GITLAB_TOKEN\s*=\s*(.+?)(?:\s+#.*)?$/);
+  if (!match?.[1]) {
+    return undefined;
+  }
+  let value = match[1].trim();
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    value = value.slice(1, -1);
+  }
+  return value.trim() || undefined;
+}
+
+export function readGitLabTokenFromEnvironment(): { token?: string; source: GitLabTokenSource } {
+  const fromProcess = process.env.GITLAB_TOKEN?.trim();
+  if (fromProcess) {
+    return { token: fromProcess, source: "env" };
+  }
+  const fromFile = readGitLabTokenFromCursorEnvFile();
+  if (fromFile) {
+    return { token: fromFile, source: "env-file" };
+  }
+  return { source: "none" };
+}
+
+export async function resolveGitLabToken(
+  context: vscode.ExtensionContext,
+): Promise<{ token?: string; source: GitLabTokenSource }> {
+  const preferEnv = vscode.workspace.getConfiguration("reviewKit").get<boolean>("preferGitLabTokenFromEnv", true);
+  const fromEnv = readGitLabTokenFromEnvironment();
+  if (preferEnv && fromEnv.token) {
+    return fromEnv;
+  }
+
+  const stored = (await context.secrets.get(TOKEN_KEY))?.trim();
   if (stored) {
-    return stored;
+    return { token: stored, source: "secret-storage" };
   }
-  if (process.env.GITLAB_TOKEN) {
-    return process.env.GITLAB_TOKEN;
+
+  if (fromEnv.token) {
+    return fromEnv;
   }
-  return readGitLabTokenFromCursorEnvFile();
+
+  return { source: "none" };
 }
 
 export function getOutputChannel(): vscode.OutputChannel {

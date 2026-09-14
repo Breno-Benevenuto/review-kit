@@ -14,6 +14,7 @@ import {
   getOutputChannel,
   gitlabBaseUrl,
   resolveGitLabToken,
+  type GitLabTokenSource,
 } from "./gitlab/tokenResolve";
 import { resolveWorkspaceGitLabProject } from "./gitlab/workspaceProject";
 import {
@@ -133,6 +134,12 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     vscode.window.registerTreeDataProvider("reviewKit.reviewProgress", progress),
     vscode.commands.registerCommand("reviewKit.configureToken", () => configureToken(context)),
     vscode.commands.registerCommand("reviewKit.refreshMrs", () => refreshMrs(mrTree)),
+    vscode.commands.registerCommand("reviewKit.reloadGitLabToken", () => {
+      void restoreClient(context).then(() => {
+        void refreshMrs(mrTree);
+        void vscode.window.showInformationMessage("Review Kit: token GitLab recarregado.");
+      });
+    }),
     vscode.commands.registerCommand("reviewKit.openVisualReview", (arg?: string | MergeRequestSummary) => {
       const mr = resolveMergeRequestForCommand(arg, mrTree, mrTreeView);
       if (!mr) {
@@ -326,15 +333,30 @@ export function deactivate(): void {
 }
 
 async function restoreClient(context: vscode.ExtensionContext): Promise<void> {
-  const token = await resolveGitLabToken(context);
+  const resolved = await resolveGitLabToken(context);
   const baseUrl = gitlabBaseUrl();
-  if (token) {
-    client = new GitLabClient(baseUrl, token);
-    output.appendLine(`GitLab client ready (${baseUrl})`);
+  if (resolved.token) {
+    client = new GitLabClient(baseUrl, resolved.token);
+    output.appendLine(`GitLab client ready (${baseUrl}) · token: ${describeTokenSource(resolved.source)}`);
     return;
   }
   client = undefined;
-  output.appendLine("No GitLab token (SecretStorage, GITLAB_TOKEN, or ~/.cursor/.env.cursor)");
+  output.appendLine(
+    "No GitLab token. Defina GITLAB_TOKEN (env ou ~/.cursor/.env.cursor) ou use Review Kit: Configure GitLab Token.",
+  );
+}
+
+function describeTokenSource(source: GitLabTokenSource): string {
+  switch (source) {
+    case "env":
+      return "GITLAB_TOKEN (ambiente)";
+    case "env-file":
+      return "GITLAB_TOKEN (~/.cursor/.env.cursor)";
+    case "secret-storage":
+      return "Configure GitLab Token";
+    default:
+      return "desconhecido";
+  }
 }
 
 async function configureToken(context: vscode.ExtensionContext): Promise<void> {
