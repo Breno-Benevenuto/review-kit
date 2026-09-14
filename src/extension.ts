@@ -10,10 +10,13 @@ import {
 } from "./providers/mrTreeProvider";
 import { ReviewProgressProvider } from "./review/reviewProgress";
 import { createReviewSession, type ReviewSession } from "./review/reviewSession";
+import { registerGitLabOAuthUriHandler, signInWithGitLabOAuth } from "./gitlab/gitlabOAuth";
 import {
+  AUTH_KIND_KEY,
   getOutputChannel,
   gitlabBaseUrl,
   resolveGitLabToken,
+  TOKEN_KEY,
   type GitLabTokenSource,
 } from "./gitlab/tokenResolve";
 import { resolveWorkspaceGitLabProject } from "./gitlab/workspaceProject";
@@ -65,7 +68,6 @@ import {
   normalizeMergeRequestSummary,
 } from "./gitlab/normalizeMr";
 
-const TOKEN_KEY = "reviewKit.gitlabToken";
 const FILE_DOUBLE_CLICK_MS = 450;
 
 let client: GitLabClient | undefined;
@@ -102,6 +104,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   registerGitLabContentProvider(context, () => client);
+  registerGitLabOAuthUriHandler(context);
   registerAutoLanguageOnOpen(context);
 
   const mrTreeView = vscode.window.createTreeView("reviewKit.mrs", {
@@ -133,6 +136,14 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     mrTreeView,
     vscode.window.registerTreeDataProvider("reviewKit.reviewProgress", progress),
     vscode.commands.registerCommand("reviewKit.configureToken", () => configureToken(context)),
+    vscode.commands.registerCommand("reviewKit.signInGitLab", () => {
+      void signInWithGitLabOAuth(context).then((ok) => {
+        if (!ok) {
+          return;
+        }
+        void restoreClient(context).then(() => refreshMrs(mrTree));
+      });
+    }),
     vscode.commands.registerCommand("reviewKit.refreshMrs", () => refreshMrs(mrTree)),
     vscode.commands.registerCommand("reviewKit.reloadGitLabToken", () => {
       void restoreClient(context).then(() => {
@@ -342,7 +353,7 @@ async function restoreClient(context: vscode.ExtensionContext): Promise<void> {
   }
   client = undefined;
   output.appendLine(
-    "No GitLab token. Defina GITLAB_TOKEN (env ou ~/.cursor/.env.cursor) ou use Review Kit: Configure GitLab Token.",
+    "No GitLab token. Entrar no GitLab (OAuth), Configure GitLab Token (PAT), ou GITLAB_TOKEN no env/~/.cursor/.env.cursor.",
   );
 }
 
@@ -352,8 +363,12 @@ function describeTokenSource(source: GitLabTokenSource): string {
       return "GITLAB_TOKEN (ambiente)";
     case "env-file":
       return "GITLAB_TOKEN (~/.cursor/.env.cursor)";
+    case "oauth":
+      return "OAuth/SSO (Entrar no GitLab)";
+    case "pat":
+      return "PAT (Configure GitLab Token)";
     case "secret-storage":
-      return "Configure GitLab Token";
+      return "Secret Storage";
     default:
       return "desconhecido";
   }
@@ -375,8 +390,9 @@ async function configureToken(context: vscode.ExtensionContext): Promise<void> {
   try {
     const { username } = await probe.validateToken();
     await context.secrets.store(TOKEN_KEY, token);
+    await context.secrets.store(AUTH_KIND_KEY, "pat");
     client = probe;
-    void vscode.window.showInformationMessage(`Review Kit connected as @${username}`);
+    void vscode.window.showInformationMessage(`Review Kit: conectado como @${username} (PAT).`);
   } catch (e) {
     const msg = e instanceof GitLabApiError ? `GitLab error ${e.status}` : String(e);
     void vscode.window.showErrorMessage(`Review Kit: invalid token or URL (${msg})`);

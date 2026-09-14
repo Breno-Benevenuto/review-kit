@@ -85,7 +85,12 @@ export class DraftCommentThreadController {
         ? vscode.CommentThreadCollapsibleState.Expanded
         : vscode.CommentThreadCollapsibleState.Collapsed;
       const draftId = draft.id;
-      thread.onDidChangeCollapsibleState(() => {
+      const collapsibleListener = (
+        thread as vscode.CommentThread & {
+          onDidChangeCollapsibleState?: vscode.Event<vscode.CommentThreadCollapsibleState>;
+        }
+      ).onDidChangeCollapsibleState;
+      collapsibleListener?.(() => {
         if (this.syncingCollapsibleState) {
           return;
         }

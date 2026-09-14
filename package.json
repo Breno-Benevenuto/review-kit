@@ -2,7 +2,7 @@
   "name": "review-kit",
   "displayName": "Review Kit",
   "description": "Guided GitLab merge request code review in Cursor",
-  "version": "0.2.8",
+  "version": "0.2.9",
   "publisher": "review-kit",
   "icon": "media/icon.png",
   "repository": {
@@ -56,7 +56,27 @@
         "reviewKit.preferGitLabTokenFromEnv": {
           "type": "boolean",
           "default": true,
-          "description": "Preferir GITLAB_TOKEN (variável de ambiente ou ~/.cursor/.env.cursor) antes do token salvo em Configure GitLab Token."
+          "description": "Preferir GITLAB_TOKEN (variável de ambiente ou ~/.cursor/.env.cursor) antes do token salvo (OAuth/PAT)."
+        },
+        "reviewKit.gitlabOAuthClientId": {
+          "type": "string",
+          "default": "",
+          "description": "Application ID do OAuth app no GitLab (fluxo Entrar no GitLab). Alternativa: GITLAB_OAUTH_CLIENT_ID."
+        },
+        "reviewKit.gitlabOAuthClientSecret": {
+          "type": "string",
+          "default": "",
+          "description": "Client secret (opcional; apps públicos com PKCE podem omitir). Alternativa: GITLAB_OAUTH_CLIENT_SECRET."
+        },
+        "reviewKit.gitlabOAuthRedirectUri": {
+          "type": "string",
+          "default": "vscode://review-kit.review-kit/gitlab-oauth",
+          "description": "Redirect URI cadastrada no OAuth app GitLab (deve bater com esta URL)."
+        },
+        "reviewKit.gitlabOAuthScopes": {
+          "type": "string",
+          "default": "api read_user read_api write_repository",
+          "description": "Escopos pedidos no authorize (OAuth)."
         }
       }
     },
@@ -89,8 +109,12 @@
     },
     "commands": [
       {
+        "command": "reviewKit.signInGitLab",
+        "title": "Review Kit: Entrar no GitLab (OAuth/SSO)"
+      },
+      {
         "command": "reviewKit.configureToken",
-        "title": "Review Kit: Configure GitLab Token"
+        "title": "Review Kit: Configure GitLab Token (PAT)"
       },
       {
         "command": "reviewKit.refreshMrs",
@@ -235,6 +259,11 @@
         },
         {
           "command": "reviewKit.postComment",
+          "when": "view == reviewKit.mrs",
+          "group": "navigation"
+        },
+        {
+          "command": "reviewKit.signInGitLab",
           "when": "view == reviewKit.mrs",
           "group": "navigation"
         },

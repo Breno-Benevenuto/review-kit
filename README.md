@@ -96,10 +96,39 @@ npm run install:cursor
 
 ## ⚙️ Configuração
 
-1. **Command Palette** → `Review Kit: Configure GitLab Token`  
-   - Token com `read_api`; comentários/approve exigem escopos de escrita conforme sua política GitLab.
+Autenticação no GitLab — **escolha uma** (ou use `GITLAB_TOKEN` para dev; ver abaixo):
 
-2. (Opcional) GitLab self-managed — defina a URL base:
+### Opção A — OAuth / SSO (recomendado em GitLab com login corporativo)
+
+1. No GitLab: **User Settings → Applications** (ou grupo/admin cria o app) → **Add new application**.
+   - **Redirect URI:** `vscode://review-kit.review-kit/gitlab-oauth`
+   - Escopos: `api`, `read_user`, `read_api`, `write_repository` (ajuste à política da instância).
+2. Copie o **Application ID** para settings:
+
+```json
+{
+  "reviewKit.gitlabOAuthClientId": "SEU_APPLICATION_ID"
+}
+```
+
+3. **Command Palette** → `Review Kit: Entrar no GitLab (OAuth/SSO)` — abre o browser; após login, o token fica no Secret Storage da extensão.
+
+(Opcional) **Client secret** se o app não for público: `reviewKit.gitlabOAuthClientSecret` ou `GITLAB_OAUTH_CLIENT_SECRET`.
+
+### Opção B — Personal Access Token (PAT)
+
+**Command Palette** → `Review Kit: Configure GitLab Token (PAT)`  
+Token com `read_api`; comentários/approve exigem escopos de escrita conforme sua política GitLab.
+
+### Dev / CI local — variável de ambiente
+
+- `GITLAB_TOKEN` no ambiente ou em `~/.cursor/.env.cursor` (não versionado).
+- Com `reviewKit.preferGitLabTokenFromEnv` (default `true`), o env tem prioridade sobre OAuth/PAT salvos.
+- `Review Kit: Recarregar token GitLab (GITLAB_TOKEN)` após mudar o arquivo.
+
+---
+
+1. (Opcional) GitLab self-managed — defina a URL base:
 
 ```json
 {
@@ -107,7 +136,7 @@ npm run install:cursor
 }
 ```
 
-3. (Opcional) Projeto fixo quando o workspace não bate com o remote:
+2. (Opcional) Projeto fixo quando o workspace não bate com o remote:
 
 ```json
 {
@@ -170,7 +199,9 @@ Branches e autor aparecem abaixo da descrição.
 
 | Comando | Descrição |
 |---------|-----------|
-| `Review Kit: Configure GitLab Token` | Salva PAT no Secret Storage |
+| `Review Kit: Entrar no GitLab (OAuth/SSO)` | Login no browser (PKCE); ideal para SSO |
+| `Review Kit: Configure GitLab Token (PAT)` | Salva PAT no Secret Storage |
+| `Review Kit: Recarregar token GitLab (GITLAB_TOKEN)` | Relê env / `.env.cursor` |
 | `Review Kit: Refresh Merge Requests` | Recarrega MRs abertos |
 | `Review Kit: Open Visual Review` | Abre painel do MR selecionado |
 | `Review Kit: Submit All Drafts` | Envia fila de comentários |
@@ -190,6 +221,9 @@ Comandos de diff/comentário exigem contexto `reviewKit.mrReviewActive` (diff ou
 | `reviewKit.projectPath` | `""` | `group/repo`; vazio = origin do workspace |
 | `reviewKit.diffInline` | `false` | Diff unificado (inline) vs side-by-side |
 | `reviewKit.openProjectEditorForNavigation` | `true` | Abre cópia do arquivo ao lado do diff para LSP/Go to Definition |
+| `reviewKit.preferGitLabTokenFromEnv` | `true` | Prioriza `GITLAB_TOKEN` sobre token OAuth/PAT salvo |
+| `reviewKit.gitlabOAuthClientId` | `""` | Application ID para OAuth |
+| `reviewKit.gitlabOAuthRedirectUri` | `vscode://review-kit.review-kit/gitlab-oauth` | Deve coincidir com o app no GitLab |
 
 ---
 
@@ -204,7 +238,7 @@ node scripts/self-check.mjs
 
 Debug: **Run Extension** em `.vscode/launch.json` (F5) ou reinstale com `npm run install:cursor`.
 
-Token para debug: variável `GITLAB_TOKEN`, Secret Storage da extensão, ou arquivo local `~/.cursor/.env.cursor` (não versionado).
+Auth: OAuth (`Entrar no GitLab`), PAT (`Configure GitLab Token`), ou `GITLAB_TOKEN` / `~/.cursor/.env.cursor`.
 
 ---
 

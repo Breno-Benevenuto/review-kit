@@ -4,10 +4,13 @@ import * as path from "node:path";
 import * as vscode from "vscode";
 
 const TOKEN_KEY = "reviewKit.gitlabToken";
+export const AUTH_KIND_KEY = "reviewKit.authKind";
+
+export { TOKEN_KEY };
 
 export const DEFAULT_GITLAB_URL = "https://gitlab.com";
 
-export type GitLabTokenSource = "env" | "env-file" | "secret-storage" | "none";
+export type GitLabTokenSource = "env" | "env-file" | "oauth" | "pat" | "secret-storage" | "none";
 
 export function gitlabBaseUrl(): string {
   return (
@@ -87,7 +90,10 @@ export async function resolveGitLabToken(
 
   const stored = (await context.secrets.get(TOKEN_KEY))?.trim();
   if (stored) {
-    return { token: stored, source: "secret-storage" };
+    const kind = (await context.secrets.get(AUTH_KIND_KEY))?.trim();
+    const source: GitLabTokenSource =
+      kind === "oauth" ? "oauth" : kind === "pat" ? "pat" : "secret-storage";
+    return { token: stored, source };
   }
 
   if (fromEnv.token) {
