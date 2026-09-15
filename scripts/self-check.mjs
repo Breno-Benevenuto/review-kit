@@ -61,4 +61,39 @@ assert.deepEqual(ordered, [
 assert.ok(layerRank("flow") > layerRank("controller"));
 assert.ok(layerRank("service") > layerRank("flow"));
 
+function parseEnvLine(line, key) {
+  const trimmed = line.trim();
+  if (!trimmed || trimmed.startsWith("#")) return undefined;
+  const escaped = key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const match = trimmed.match(new RegExp(`^(?:export\\s+)?${escaped}\\s*=\\s*(.*)$`));
+  if (!match?.[1]) return undefined;
+  let value = match[1].trim();
+  const inlineComment = value.indexOf(" #");
+  if (inlineComment >= 0) value = value.slice(0, inlineComment).trim();
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    value = value.slice(1, -1);
+  }
+  return value.trim() || undefined;
+}
+
+assert.equal(
+  parseEnvLine("export GITLAB_TOKEN=fake.token.value.01.0testcase", "GITLAB_TOKEN"),
+  "fake.token.value.01.0testcase",
+);
+
+function inferGitLabBaseUrlFromRemote(remote) {
+  const ssh = remote.trim().match(/^git@([^:]+):/);
+  if (!ssh?.[1]) return undefined;
+  const host = ssh[1].startsWith("gitlabssh.") ? ssh[1].replace(/^gitlabssh\./, "gitlab.") : ssh[1];
+  return `https://${host}`;
+}
+
+assert.equal(
+  inferGitLabBaseUrlFromRemote("git@gitlabssh.example.com:group/repo.git"),
+  "https://gitlab.example.com",
+);
+
 console.log("self-check ok");

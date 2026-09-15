@@ -2,7 +2,7 @@
   "name": "review-kit",
   "displayName": "Review Kit",
   "description": "Guided GitLab merge request code review in Cursor",
-  "version": "0.2.10",
+  "version": "0.2.15",
   "publisher": "review-kit",
   "icon": "media/icon.png",
   "repository": {
@@ -30,8 +30,8 @@
       "properties": {
         "reviewKit.gitlabUrl": {
           "type": "string",
-          "default": "https://gitlab.com",
-          "description": "GitLab instance base URL (no trailing slash). Use your self-managed URL if not gitlab.com."
+          "default": "",
+          "description": "URL base do GitLab (sem / final). Vazio = GITLAB_URL (.env.cursor, igual MCP), depois host do git remote origin, depois gitlab.com."
         },
         "reviewKit.projectPath": {
           "type": "string",
@@ -56,27 +56,26 @@
         "reviewKit.preferGitLabTokenFromEnv": {
           "type": "boolean",
           "default": true,
-          "description": "Preferir GITLAB_TOKEN (variável de ambiente ou ~/.cursor/.env.cursor) antes do token salvo (OAuth/PAT)."
+          "description": "Preferir GITLAB_TOKEN (variável de ambiente ou ~/.cursor/.env.cursor) antes do token salvo em Configure GitLab Token."
         },
-        "reviewKit.gitlabOAuthClientId": {
+        "reviewKit.gitlabInsecureTls": {
           "type": "string",
-          "default": "",
-          "description": "Application ID do OAuth app no GitLab (fluxo Entrar no GitLab). Alternativa: GITLAB_OAUTH_CLIENT_ID."
+          "enum": ["auto", "true", "false"],
+          "default": "auto",
+          "description": "TLS em GitLab self-managed (.local): auto = certificado corporativo aceito nesses hosts. true/false força."
         },
-        "reviewKit.gitlabOAuthClientSecret": {
+        "reviewKit.gitlabHttpTransport": {
           "type": "string",
-          "default": "",
-          "description": "Client secret (opcional; apps públicos com PKCE podem omitir). Alternativa: GITLAB_OAUTH_CLIENT_SECRET."
+          "enum": ["auto", "curl", "node"],
+          "default": "auto",
+          "description": "auto = curl em hosts .local (evita ECONNRESET do Node no Cursor); node = só https nativo."
         },
-        "reviewKit.gitlabOAuthRedirectUri": {
-          "type": "string",
-          "default": "vscode://review-kit.review-kit/gitlab-oauth",
-          "description": "Redirect URI cadastrada no OAuth app GitLab (deve bater com esta URL)."
-        },
-        "reviewKit.gitlabOAuthScopes": {
-          "type": "string",
-          "default": "api read_user read_api write_repository",
-          "description": "Escopos pedidos no authorize (OAuth)."
+        "reviewKit.gitlabHttpRetries": {
+          "type": "number",
+          "default": 3,
+          "minimum": 1,
+          "maximum": 8,
+          "description": "Tentativas HTTP antes de fallback curl (transport node)."
         }
       }
     },
@@ -98,7 +97,7 @@
     "viewsWelcome": [
       {
         "view": "reviewKit.mrs",
-        "contents": "Conecte ao GitLab para ver os MRs.\n\n[$(sign-in) Entrar com SSO](command:reviewKit.signInGitLab)\n\n[$(key) Colar token PAT](command:reviewKit.configureToken)\n\nConfira `reviewKit.gitlabUrl` se não for gitlab.com."
+        "contents": "Use **GITLAB_TOKEN** em `~/.cursor/.env.cursor` (mesmo padrão do MCP).\n\n[$(key) Configure GitLab Token](command:reviewKit.configureToken)\n\nURL: vazio = `GITLAB_URL` ou host HTTPS inferido do `git remote` (SSH `gitlabssh` → API `gitlab`)."
       }
     ],
     "views": {
@@ -115,13 +114,8 @@
     },
     "commands": [
       {
-        "command": "reviewKit.signInGitLab",
-        "title": "Entrar (SSO)",
-        "icon": "$(sign-in)"
-      },
-      {
         "command": "reviewKit.configureToken",
-        "title": "Token (PAT)",
+        "title": "Review Kit: Configure GitLab Token",
         "icon": "$(key)"
       },
       {
@@ -260,11 +254,6 @@
     ],
     "menus": {
       "view/title": [
-        {
-          "command": "reviewKit.signInGitLab",
-          "when": "view == reviewKit.mrs",
-          "group": "navigation@0"
-        },
         {
           "command": "reviewKit.configureToken",
           "when": "view == reviewKit.mrs",

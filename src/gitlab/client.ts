@@ -4,6 +4,13 @@ import type {
   MergeRequestSummary,
 } from "./types";
 import { normalizeMergeRequestSummary } from "./normalizeMr";
+import {
+  gitlabRequest,
+  headerValue,
+  resolveGitLabTlsInsecure,
+  type GitLabHttpResponse,
+} from "./gitlabHttp";
+import { redactGitLabSecrets } from "./redactSecrets";
 
 export type GitLabProjectRef = {
   id: number;
@@ -25,17 +32,29 @@ export class GitLabApiError extends Error {
   }
 }
 
+export class GitLabNetworkError extends Error {
+  constructor(message: string, readonly cause?: unknown) {
+    super(message);
+    this.name = "GitLabNetworkError";
+  }
+}
+
+type AuthMode = "private-token" | "bearer";
+
 export class GitLabClient {
+  private readonly insecureTls: boolean;
+
   constructor(
     private readonly baseUrl: string,
     token: string,
   ) {
     this.token = token.trim();
+    this.insecureTls = resolveGitLabTlsInsecure(baseUrl);
   }
 
   private readonly token: string;
 
-  private authHeaders(mode: "bearer" | "private-token"): Record<string, string> {
+  private authHeaders(mode: AuthMode): Record<string, string> {
     if (mode === "bearer") {
       return { Authorization: `Bearer ${this.token}` };
     }
@@ -55,21 +74,31 @@ export class GitLabClient {
 
   private async fetchWithAuth(
     url: string,
-    init?: RequestInit,
-    authMode: "bearer" | "private-token" = "bearer",
-  ): Promise<Response> {
+    init: { method?: string; headers?: Record<string, string>; body?: string },
+    authMode: AuthMode,
+  ): Promise<GitLabHttpResponse> {
     let current = url;
     for (let hop = 0; hop < 6; hop++) {
-      const res = await fetch(current, {
-        ...init,
-        redirect: "manual",
-        headers: {
-          ...this.authHeaders(authMode),
-          ...(init?.headers ?? {}),
-        },
-      });
+      let res: GitLabHttpResponse;
+      try {
+        res = await gitlabRequest(
+          current,
+          {
+            ...init,
+            headers: { ...this.authHeaders(authMode), ...init.headers },
+          },
+          this.insecureTls,
+          this.baseUrl,
+        );
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        const hint = msg.includes("UNABLE_TO_VERIFY") || msg.includes("certificate")
+          ? " (TLS: ative reviewKit.gitlabInsecureTls ou GITLAB_INSECURE_TLS=1)"
+          : "";
+        throw new GitLabNetworkError(redactGitLabSecrets(`Rede GitLab: ${msg}${hint}`, this.token), e);
+      }
       if (res.status >= 300 && res.status < 400) {
-        const location = res.headers.get("location");
+        const location = headerValue(res.headers, "location");
         if (!location) {
           return res;
         }
@@ -83,22 +112,27 @@ export class GitLabClient {
 
   private async request<T>(path: string, init?: RequestInit, query?: Record<string, string | number | boolean>): Promise<T> {
     const url = this.url(path, query);
-    const headers = {
+    const headers: Record<string, string> = {
       Accept: "application/json",
-      ...(init?.headers ?? {}),
     };
-    let res = await this.fetchWithAuth(url, { ...init, headers }, "bearer");
-    if (res.status === 401) {
-      res = await this.fetchWithAuth(url, { ...init, headers }, "private-token");
+    const extra = init?.headers as Record<string, string> | undefined;
+    if (extra) {
+      Object.assign(headers, extra);
     }
-    if (!res.ok) {
-      const body = await res.text().catch(() => "");
-      throw new GitLabApiError(body || res.statusText, res.status, path);
+    const method = init?.method;
+    const body = init?.body ? String(init.body) : undefined;
+
+    let res = await this.fetchWithAuth(url, { method, headers, body }, "private-token");
+    if (res.status === 401) {
+      res = await this.fetchWithAuth(url, { method, headers, body }, "bearer");
+    }
+    if (res.status < 200 || res.status >= 300) {
+      throw new GitLabApiError(res.body || `HTTP ${res.status}`, res.status, path);
     }
     if (res.status === 204) {
       return undefined as T;
     }
-    return (await res.json()) as T;
+    return JSON.parse(res.body) as T;
   }
 
   async validateToken(): Promise<{ username: string }> {
@@ -180,16 +214,18 @@ export class GitLabClient {
 
   async getFileRaw(projectId: number, filePath: string, ref: string): Promise<string> {
     const encodedPath = encodeURIComponent(filePath);
-    const res = await this.fetchWithAuth(
-      this.url(`/projects/${projectId}/repository/files/${encodedPath}/raw`, { ref }),
-    );
+    const url = this.url(`/projects/${projectId}/repository/files/${encodedPath}/raw`, { ref });
+    let res = await this.fetchWithAuth(url, { headers: { Accept: "text/plain" } }, "private-token");
+    if (res.status === 401) {
+      res = await this.fetchWithAuth(url, { headers: { Accept: "text/plain" } }, "bearer");
+    }
     if (res.status === 404) {
       return "";
     }
-    if (!res.ok) {
-      throw new GitLabApiError(await res.text(), res.status);
+    if (res.status < 200 || res.status >= 300) {
+      throw new GitLabApiError(res.body || `HTTP ${res.status}`, res.status);
     }
-    return res.text();
+    return res.body;
   }
 
   async createMrNote(projectId: number, mrIid: number, body: string): Promise<void> {

@@ -1,5 +1,6 @@
 import * as vscode from "vscode";
-import { GitLabApiError, GitLabClient } from "./gitlab/client";
+import { GitLabApiError, GitLabClient, GitLabNetworkError } from "./gitlab/client";
+import { resolveGitLabTlsInsecure } from "./gitlab/gitlabHttp";
 import { effectivePath } from "./graph/flowGraph";
 import { registerGitLabContentProvider } from "./providers/gitlabContentProvider";
 import {
@@ -10,11 +11,11 @@ import {
 } from "./providers/mrTreeProvider";
 import { ReviewProgressProvider } from "./review/reviewProgress";
 import { createReviewSession, type ReviewSession } from "./review/reviewSession";
-import { registerGitLabOAuthUriHandler, signInWithGitLabOAuth } from "./gitlab/gitlabOAuth";
 import {
-  AUTH_KIND_KEY,
   getOutputChannel,
   gitlabBaseUrl,
+  gitlabBaseUrlResolutionNote,
+  refreshGitLabBaseUrl,
   resolveGitLabToken,
   readGitLabTokenFromEnvironment,
   TOKEN_KEY,
@@ -105,7 +106,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   );
 
   registerGitLabContentProvider(context, () => client);
-  registerGitLabOAuthUriHandler(context);
   registerAutoLanguageOnOpen(context);
 
   const mrTreeView = vscode.window.createTreeView("reviewKit.mrs", {
@@ -137,14 +137,6 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     mrTreeView,
     vscode.window.registerTreeDataProvider("reviewKit.reviewProgress", progress),
     vscode.commands.registerCommand("reviewKit.configureToken", () => configureToken(context, mrTree)),
-    vscode.commands.registerCommand("reviewKit.signInGitLab", () => {
-      void signInWithGitLabOAuth(context).then((ok) => {
-        if (!ok) {
-          return;
-        }
-        void restoreClient(context, mrTree).then(() => refreshMrs(mrTree));
-      });
-    }),
     vscode.commands.registerCommand("reviewKit.refreshMrs", () => refreshMrs(mrTree)),
     vscode.commands.registerCommand("reviewKit.reloadGitLabToken", () => {
       void restoreClient(context, mrTree).then(() => {
@@ -345,17 +337,22 @@ export function deactivate(): void {
 }
 
 async function restoreClient(context: vscode.ExtensionContext, mrTree?: MrTreeProvider): Promise<void> {
+  await refreshGitLabBaseUrl();
   const resolved = await resolveGitLabToken(context);
   const baseUrl = gitlabBaseUrl();
   if (resolved.token) {
     client = new GitLabClient(baseUrl, resolved.token);
-    output.appendLine(`GitLab client ready (${baseUrl}) · token: ${describeTokenSource(resolved.source)}`);
+    output.appendLine(`GitLab client ready (${baseUrl}) · token: ${describeTokenSource(resolved.source)} · TLS insecure: ${resolveGitLabTlsInsecure(baseUrl)}`);
+    const urlNote = gitlabBaseUrlResolutionNote();
+    if (urlNote) {
+      output.appendLine(urlNote);
+    }
     syncGitLabAuthUi(mrTree);
     return;
   }
   client = undefined;
   output.appendLine(
-    "No GitLab token. Entrar no GitLab (OAuth), Configure GitLab Token (PAT), ou GITLAB_TOKEN no env/~/.cursor/.env.cursor.",
+    "Sem token GitLab. Use Review Kit: Configure GitLab Token ou GITLAB_TOKEN em ~/.cursor/.env.cursor.",
   );
   syncGitLabAuthUi(mrTree);
 }
@@ -371,12 +368,8 @@ function describeTokenSource(source: GitLabTokenSource): string {
       return "GITLAB_TOKEN (ambiente)";
     case "env-file":
       return "GITLAB_TOKEN (~/.cursor/.env.cursor)";
-    case "oauth":
-      return "OAuth/SSO (Entrar no GitLab)";
     case "pat":
-      return "PAT (Configure GitLab Token)";
-    case "secret-storage":
-      return "Secret Storage";
+      return "token salvo (Configure GitLab Token)";
     default:
       return "desconhecido";
   }
@@ -384,22 +377,22 @@ function describeTokenSource(source: GitLabTokenSource): string {
 
 async function configureToken(context: vscode.ExtensionContext, mrTree: MrTreeProvider): Promise<void> {
   const token = await vscode.window.showInputBox({
-    title: "GitLab Personal Access Token",
+    title: "GitLab access token",
     password: true,
     ignoreFocusOut: true,
-    placeHolder: "glpat-… ou token novo do GitLab",
-    prompt: "Escopos: read_api (+ escrita para comentários/approve). URL: reviewKit.gitlabUrl",
+    placeHolder: "Cole o token (GitLab → Settings → Access tokens)",
+    prompt: "Escopos: read_api (+ escrita para comentários/approve). Instância: reviewKit.gitlabUrl",
   });
   if (!token?.trim()) {
     return;
   }
   const trimmed = token.trim();
+  await refreshGitLabBaseUrl();
   const baseUrl = gitlabBaseUrl();
   const probe = new GitLabClient(baseUrl, trimmed);
   try {
     const { username } = await probe.validateToken();
     await context.secrets.store(TOKEN_KEY, trimmed);
-    await context.secrets.store(AUTH_KIND_KEY, "pat");
     client = probe;
     syncGitLabAuthUi(mrTree);
 
@@ -407,19 +400,21 @@ async function configureToken(context: vscode.ExtensionContext, mrTree: MrTreePr
     const fromEnv = readGitLabTokenFromEnvironment();
     if (preferEnv && fromEnv.token && fromEnv.token !== trimmed) {
       void vscode.window.showWarningMessage(
-        "Review Kit: GITLAB_TOKEN no ambiente tem prioridade sobre o PAT salvo. " +
+        "Review Kit: GITLAB_TOKEN no ambiente tem prioridade sobre o token salvo. " +
           "Desative reviewKit.preferGitLabTokenFromEnv ou remova GITLAB_TOKEN.",
       );
     }
 
-    void vscode.window.showInformationMessage(`Review Kit: conectado como @${username} (PAT) · ${baseUrl}`);
+    void vscode.window.showInformationMessage(`Review Kit: conectado como @${username} · ${baseUrl}`);
     void refreshMrs(mrTree);
   } catch (e) {
     const detail =
-      e instanceof GitLabApiError
-        ? `HTTP ${e.status} em ${baseUrl}/api/v4/user — confira token, escopos e reviewKit.gitlabUrl`
-        : String(e);
-    void vscode.window.showErrorMessage(`Review Kit: token inválido (${detail})`);
+      e instanceof GitLabNetworkError
+        ? e.message
+        : e instanceof GitLabApiError
+          ? `HTTP ${e.status} em ${baseUrl}/api/v4/user — confira token (escopo api), GITLAB_URL e reviewKit.gitlabUrl`
+          : String(e);
+    void vscode.window.showErrorMessage(`Review Kit: falha ao conectar (${detail})`);
   }
 }
 
