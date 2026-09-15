@@ -2,7 +2,7 @@
   "name": "review-kit",
   "displayName": "Review Kit",
   "description": "Guided GitLab merge request code review in Cursor",
-  "version": "0.2.15",
+  "version": "0.2.16",
   "publisher": "review-kit",
   "icon": "media/icon.png",
   "repository": {
