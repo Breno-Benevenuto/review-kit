@@ -3,7 +3,6 @@ import {
   escapeHtml,
   type FileReviewCard,
 } from "../review/diffPresentation";
-import { renderEditorReviewSummaryHtml } from "../review/editorReviewSummary";
 import { getReviewDrafts, isDraftExpanded } from "../review/reviewDrafts";
 import { renderMrDescriptionHtml } from "../review/mrDescriptionHtml";
 import { renderMrFlowSvg } from "../graph/mrFlowDiagram";
@@ -11,6 +10,9 @@ import type { MrDiscussionThreadView } from "../gitlab/types";
 import { renderMrDiscussionsSection } from "../review/mrDiscussionsPanel";
 import { setDiffReviewOpen } from "../review/reviewFileNavigation";
 import type { ReviewSession } from "../review/reviewSession";
+import { renderSideBySideDiffHtml } from "../review/sideBySideDiffHtml";
+import { type SymbolRefSummary, renderSymbolRefsHtml } from "../review/changedSymbolRefs";
+import { detectRisks } from "../review/diffPresentation";
 
 type PanelState = {
   session: ReviewSession;
@@ -20,6 +22,8 @@ type PanelState = {
   discussions: MrDiscussionThreadView[];
   discussionsLoading: boolean;
   discussionsError?: string;
+  symbolRefs: SymbolRefSummary[];
+  symbolRefsLoading: boolean;
 };
 
 export class VisualReviewPanel {
@@ -57,6 +61,8 @@ export class VisualReviewPanel {
         discussions: VisualReviewPanel.current.state.discussions,
         discussionsLoading: VisualReviewPanel.current.state.discussionsLoading,
         discussionsError: VisualReviewPanel.current.state.discussionsError,
+        symbolRefs: VisualReviewPanel.current.state.symbolRefs,
+        symbolRefsLoading: VisualReviewPanel.current.state.symbolRefsLoading,
       };
       VisualReviewPanel.current.render();
       VisualReviewPanel.current.panel.reveal(vscode.ViewColumn.One);
@@ -70,7 +76,16 @@ export class VisualReviewPanel {
     );
     const instance = new VisualReviewPanel(
       panel,
-      { session, activePath: startPath, reviewedPaths: new Set(reviewedPaths), onSourceBranch: false, discussions: [], discussionsLoading: true },
+      {
+        session,
+        activePath: startPath,
+        reviewedPaths: new Set(reviewedPaths),
+        onSourceBranch: false,
+        discussions: [],
+        discussionsLoading: true,
+        symbolRefs: [],
+        symbolRefsLoading: true,
+      },
       onMessage,
     );
     VisualReviewPanel.current = instance;
@@ -120,18 +135,34 @@ export class VisualReviewPanel {
     this.render();
   }
 
+  setSymbolRefsLoading(loading: boolean): void {
+    this.state.symbolRefsLoading = loading;
+    if (loading) {
+      this.state.symbolRefs = [];
+    }
+    this.render();
+  }
+
+  setSymbolRefs(refs: SymbolRefSummary[]): void {
+    this.state.symbolRefs = refs;
+    this.state.symbolRefsLoading = false;
+    this.render();
+  }
+
   private render(): void {
     const { session, activePath, reviewedPaths, discussions, discussionsLoading, discussionsError } =
       this.state;
     const activeChange = session.changeByPath.get(activePath);
-    const previewHtml = activeChange
-      ? renderEditorReviewSummaryHtml(
-          activePath,
-          activeChange.diff ?? "",
-          false,
-          session.mr.source_branch,
-        )
-      : "";
+    const activeDiff = activeChange?.diff ?? "";
+    const diffHtml = activeChange ? renderSideBySideDiffHtml(activePath, activeDiff) : "";
+    const risks = detectRisks(activeDiff);
+    const risksHtml =
+      risks.length > 0
+        ? `<div class="risks">${risks.map((r) => `<span class="risk-tag">${escapeHtml(r)}</span>`).join("")}</div>`
+        : `<div class="risks ok">Nenhum padrão de risco automático neste arquivo.</div>`;
+    const refsHtml = this.state.symbolRefsLoading
+      ? `<p class="refs-loading">Carregando referências LSP…</p>`
+      : renderSymbolRefsHtml(this.state.symbolRefs);
 
     const queueHtml = session.cards
       .map((card) => renderQueueItem(card, card.path === activePath, reviewedPaths.has(card.path)))
@@ -141,7 +172,7 @@ export class VisualReviewPanel {
     const total = session.cards.length;
     const drafts = getReviewDrafts();
     const draftsHtml = renderDraftsSection(drafts);
-    const overviewHtml = renderMrOverview(session, activePath);
+    const overviewHtml = renderMrOverviewCollapsed(session, activePath);
     const discussionsHtml = renderMrDiscussionsSection(
       discussions,
       discussionsLoading,
@@ -159,9 +190,41 @@ body { margin: 0; font-family: var(--vscode-font-family); color: var(--vscode-ed
 header { padding: 10px 12px; border-bottom: 1px solid var(--vscode-panel-border); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 header h1 { font-size: 13px; margin: 0; flex: 1; min-width: 200px; }
 .progress { font-size: 12px; opacity: 0.85; }
-.toolbar button { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border: 0; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
-.toolbar button.danger { background: var(--vscode-inputValidation-errorBackground); color: var(--vscode-inputValidation-errorForeground); }
-.toolbar button.approve { background: var(--vscode-gitDecoration-addedResourceForeground, #2ea043); color: var(--vscode-button-foreground, #fff); }
+.toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.toolbar button {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 6px 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: filter 0.12s ease, transform 0.08s ease;
+}
+.toolbar button:hover:not(:disabled) { filter: brightness(1.08); }
+.toolbar button:active:not(:disabled) { transform: translateY(1px); }
+.toolbar button:disabled { opacity: 0.45; cursor: default; }
+.toolbar button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); }
+.toolbar button.secondary {
+  background: var(--vscode-button-secondaryBackground);
+  color: var(--vscode-button-secondaryForeground);
+  border-color: var(--vscode-panel-border);
+}
+.toolbar button.ghost {
+  background: transparent;
+  color: var(--vscode-foreground);
+  border-color: var(--vscode-panel-border);
+}
+.toolbar button.danger {
+  background: var(--vscode-inputValidation-errorBackground);
+  color: var(--vscode-inputValidation-errorForeground);
+  border-color: var(--vscode-inputValidation-errorBorder, transparent);
+}
+.toolbar button.approve {
+  background: var(--vscode-gitDecoration-addedResourceForeground, #2ea043);
+  color: var(--vscode-editor-background, #fff);
+}
+.toolbar .sep { width: 1px; height: 22px; background: var(--vscode-panel-border); margin: 0 2px; }
 main { flex: 1; display: grid; grid-template-columns: 300px 1fr; min-height: 0; }
 .queue { border-right: 1px solid var(--vscode-panel-border); overflow: auto; padding: 8px; }
 .queue-item { width: 100%; text-align: left; border: 1px solid var(--vscode-panel-border); background: var(--vscode-sideBar-background); color: inherit; border-radius: 8px; padding: 8px; margin-bottom: 8px; cursor: pointer; }
@@ -205,7 +268,36 @@ main { flex: 1; display: grid; grid-template-columns: 300px 1fr; min-height: 0; 
 .draft-body { margin-top: 4px; }
 .draft-empty { font-size: 12px; opacity: .8; }
 .mode-on { color: var(--vscode-gitDecoration-addedResourceForeground); font-weight: 600; }
-.mr-overview { padding: 12px; border-bottom: 1px solid var(--vscode-panel-border); }
+.mr-overview { padding: 8px 12px; border-bottom: 1px solid var(--vscode-panel-border); }
+.mr-overview details { margin-bottom: 8px; }
+.mr-overview summary { cursor: pointer; font-size: 12px; font-weight: 600; padding: 4px 0; }
+.diff-panel { padding: 0 12px 16px; flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.diff-panel-head { padding: 10px 0 8px; border-bottom: 1px solid var(--vscode-panel-border); margin-bottom: 8px; }
+.diff-empty, .refs-loading, .refs-empty { font-size: 12px; opacity: 0.85; }
+.diff-split-head { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 11px; font-weight: 600; opacity: 0.85; margin-bottom: 4px; }
+.diff-split { font-family: var(--vscode-editor-font-family); font-size: 11px; line-height: 1.45; overflow: auto; flex: 1; border: 1px solid var(--vscode-panel-border); border-radius: 8px; background: var(--vscode-editor-background); }
+.diff-hunk { grid-column: 1 / -1; padding: 4px 8px; opacity: 0.75; background: var(--vscode-editor-inactiveSelectionBackground); font-size: 10px; }
+.diff-row { display: grid; grid-template-columns: 1fr 1fr; }
+.diff-cell { display: flex; gap: 4px; padding: 0 6px; border-bottom: 1px solid var(--vscode-panel-border); min-height: 1.45em; }
+.diff-cell code { flex: 1; white-space: pre-wrap; word-break: break-word; }
+.diff-cell.left.del, .diff-cell.right.add, .diff-cell.right.mod { background: var(--vscode-diffEditor-insertedLineBackground, rgba(46,160,67,.12)); }
+.diff-cell.left.del { background: var(--vscode-diffEditor-removedLineBackground, rgba(248,81,73,.12)); }
+.diff-cell.left.del.only { background: var(--vscode-diffEditor-removedLineBackground, rgba(248,81,73,.12)); }
+.gutter { flex: 0 0 36px; text-align: right; padding: 0 4px; border: 0; background: transparent; color: var(--vscode-descriptionForeground); cursor: pointer; font-family: inherit; font-size: 10px; }
+.gutter:hover { color: var(--vscode-textLink-foreground); text-decoration: underline; }
+.gutter.empty { flex: 0 0 36px; }
+.tok-kw { color: var(--vscode-symbolIcon-keywordForeground, #c586c0); }
+.tok-str { color: var(--vscode-symbolIcon-stringForeground, #ce9178); }
+.tok-com { opacity: 0.7; }
+.tok-type { color: var(--vscode-symbolIcon-classForeground, #4ec9b0); }
+.symbol-refs { margin: 12px 0; padding: 10px; border: 1px solid var(--vscode-panel-border); border-radius: 8px; background: var(--vscode-sideBar-background); }
+.symbol-refs h3 { font-size: 12px; margin: 0 0 8px; }
+.ref-card { margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--vscode-panel-border); }
+.ref-card:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 0; }
+.ref-head { font-size: 12px; display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.ref-kind, .ref-line, .ref-count { font-size: 10px; opacity: 0.8; }
+.ref-list { margin: 6px 0 0; padding-left: 18px; font-size: 11px; }
+.ref-list .muted { opacity: 0.7; list-style: none; margin-left: -18px; }
 .mr-overview h2 { font-size: 12px; margin: 0 0 8px; font-weight: 600; }
 .mr-overview h2:not(:first-child) { margin-top: 16px; }
 .mr-description-body { font-size: 12px; line-height: 1.55; opacity: 0.95; }
@@ -286,26 +378,34 @@ main { flex: 1; display: grid; grid-template-columns: 300px 1fr; min-height: 0; 
   <h1>${escapeHtml(session.mr.title)}</h1>
   <div class="progress">${progress}/${total} revisados</div>
   <div class="toolbar">
-    <button onclick="post('commentLine')">Comentar linha</button>
-    <button class="secondary" onclick="post('prev')">← Anterior</button>
-    <button class="secondary" onclick="post('next')">Próximo →</button>
-    <button onclick="post('toggleReviewed')">Marcar revisado</button>
-    <button onclick="post('submitAllDrafts')" ${drafts.length === 0 ? "disabled" : ""}>Enviar fila (${drafts.length})</button>
-    <button class="secondary" onclick="post('cancelDrafts')" ${drafts.length === 0 ? "disabled" : ""}>Limpar fila</button>
-    <button class="approve" onclick="post('approveMr')">Aprovar MR</button>
-    <button class="danger" onclick="post('rejectMr')">Rejeitar MR</button>
+    <button class="ghost" onclick="post('prev')">← Anterior</button>
+    <button class="ghost" onclick="post('next')">Próximo →</button>
+    <span class="sep"></span>
+    <button class="primary" onclick="post('commentLine')">Comentar linha</button>
+    <button class="secondary" onclick="post('toggleReviewed')">Marcar revisado</button>
+    <button class="secondary" onclick="post('openEditorDiff')">Diff no editor</button>
+    <span class="sep"></span>
+    <button class="primary" onclick="post('submitAllDrafts')" ${drafts.length === 0 ? "disabled" : ""}>Enviar fila (${drafts.length})</button>
+    <button class="ghost" onclick="post('cancelDrafts')" ${drafts.length === 0 ? "disabled" : ""}>Limpar fila</button>
+    <span class="sep"></span>
+    <button class="approve" onclick="post('approveMr')">Aprovar</button>
+    <button class="danger" onclick="post('rejectMr')">Rejeitar</button>
   </div>
 </header>
 <main>
   <section class="queue">${queueHtml}</section>
   <section class="detail">
     ${overviewHtml}
-    ${discussionsHtml}
-    <div class="file-section">
-      <div class="path">${escapeHtml(activePath)}</div>
+    <div class="diff-panel">
+      <div class="diff-panel-head">
+        <div class="path">${escapeHtml(activePath)}</div>
+        ${risksHtml}
+      </div>
+      ${refsHtml}
+      ${diffHtml}
     </div>
+    ${discussionsHtml}
     ${draftsHtml}
-    ${previewHtml}
   </section>
 </main>
 <script>
@@ -317,13 +417,15 @@ document.querySelectorAll('[data-path]').forEach(el => {
   el.addEventListener('click', () => post('select', el.getAttribute('data-path')));
   el.addEventListener('dblclick', (e) => {
     e.preventDefault();
-    post('openDiff', el.getAttribute('data-path'));
+    const path = el.getAttribute('data-path');
+    if (path) vscode.postMessage({ type: 'openFile', path });
   });
 });
-document.querySelectorAll('.removed-line').forEach(btn => {
+document.querySelectorAll('.diff-cell .gutter[data-line]').forEach(btn => {
   btn.addEventListener('click', () => {
-    const oldLine = Number(btn.getAttribute('data-old-line'));
-    if (oldLine) vscode.postMessage({ type: 'commentLineRemoved', path: ${JSON.stringify(activePath)}, oldLine });
+    const line = Number(btn.getAttribute('data-line'));
+    const side = btn.getAttribute('data-side') === 'old' ? 'old' : 'new';
+    if (line) vscode.postMessage({ type: 'commentLineAt', path: ${JSON.stringify(activePath)}, line, side });
   });
 });
 document.querySelectorAll('[data-draft-id]').forEach(el => {
@@ -386,7 +488,9 @@ function renderQueueItem(card: FileReviewCard, active: boolean, reviewed: boolea
 
 export type WebviewRequest =
   | { type: "select"; path: string }
-  | { type: "openDiff"; path?: string }
+  | { type: "openFile"; path: string }
+  | { type: "openEditorDiff"; path?: string }
+  | { type: "commentLineAt"; path: string; line: number; side: "new" | "old" }
   | { type: "prev" }
   | { type: "next" }
   | { type: "toggleReviewed" }
@@ -427,19 +531,22 @@ function renderDraftsSection(drafts: ReturnType<typeof getReviewDrafts>): string
   return `<section class="drafts"><h2>Fila (${drafts.length})</h2>${items}</section>`;
 }
 
-function renderMrOverview(session: ReviewSession, activePath: string): string {
+function renderMrOverviewCollapsed(session: ReviewSession, activePath: string): string {
   const descHtml = renderMrDescriptionHtml(session.mrDescription);
   const flowSvg = renderMrFlowSvg(session.flowGraph);
   const branch = `${escapeHtml(session.mr.source_branch)} → ${escapeHtml(session.mr.target_branch)}`;
   const author = escapeHtml(session.mr.author?.name ?? session.mr.author?.username ?? "");
   return `<section class="mr-overview">
-  <h2>Descrição</h2>
-  ${descHtml}
-  <p class="flow-hint">${branch}${author ? ` · ${author}` : ""}</p>
-  <h2>Fluxo do MR</h2>
-  <div class="flow-wrap">${flowSvg}</div>
-  <p class="flow-hint">Colunas = camada (controller → flow → service…). Setas = imports entre arquivos alterados. Clique em um bloco para selecionar na fila${
-    activePath ? ` · ativo: ${escapeHtml(activePath.split("/").pop() ?? activePath)}` : ""
-  }.</p>
+  <details>
+    <summary>Descrição do MR · ${branch}${author ? ` · ${author}` : ""}</summary>
+    ${descHtml}
+  </details>
+  <details>
+    <summary>Fluxo do MR (camadas)${
+      activePath ? ` · ativo: ${escapeHtml(activePath.split("/").pop() ?? activePath)}` : ""
+    }</summary>
+    <div class="flow-wrap">${flowSvg}</div>
+    <p class="flow-hint">Clique em um bloco para selecionar na fila.</p>
+  </details>
 </section>`;
 }

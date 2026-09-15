@@ -19,8 +19,9 @@ export function createReviewSession(
   changes: MergeRequestChange[],
   diffRefs: { base_sha: string; head_sha: string; start_sha: string },
   overview?: { description?: string; flowGraph?: FlowGraph },
+  orderedChangesInput?: MergeRequestChange[],
 ): ReviewSession {
-  const orderedChanges = orderChanges(changes);
+  const orderedChanges = orderedChangesInput ?? orderChanges(changes);
   const cards = orderedChanges.map((change, i) => buildFileReviewCard(change, i + 1));
   const changeByPath = new Map<string, MergeRequestChange>();
   for (const change of orderedChanges) {

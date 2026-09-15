@@ -17,6 +17,11 @@ export async function buildFlowGraph(
   readFile: (path: string) => Promise<string>,
 ): Promise<FlowGraph> {
   const paths = [...new Set(changes.map(effectivePath).filter(Boolean))];
+  const contents = new Map<string, string>();
+  for (const path of paths) {
+    contents.set(path, await readFile(path));
+  }
+  const readSync = (path: string) => contents.get(path) ?? "";
   const edgesRaw = await buildDependencyEdges(paths, readFile);
   const nodes: FlowNode[] = paths.map((path) => ({
     id: path,
@@ -29,7 +34,7 @@ export async function buildFlowGraph(
     source: e.source,
     target: e.target,
   }));
-  const suggestedOrder = suggestReviewOrder(paths);
+  const suggestedOrder = suggestReviewOrder(paths, readSync);
   return { nodes, edges, suggestedOrder };
 }
 

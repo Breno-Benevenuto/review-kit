@@ -52,7 +52,7 @@ export async function revealMrLine(
     return;
   }
   void vscode.window.showWarningMessage(
-    "Review Kit: não foi possível focar a linha no diff. Abra o diff do arquivo (lado correto: new/old).",
+    "Review Kit: não foi possível focar a linha. Abra o arquivo do MR no editor.",
   );
 }
 

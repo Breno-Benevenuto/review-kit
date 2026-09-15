@@ -3,7 +3,7 @@ import type { GitLabClient } from "../gitlab/client";
 import { resolveProjectIdForMr, getActiveGitLabProject } from "../gitlab/projectContext";
 import type { MergeRequestChange, MergeRequestSummary } from "../gitlab/types";
 import { effectivePath } from "../graph/flowGraph";
-import { orderChanges } from "../review/orderChanges";
+import { orderChanges, orderChangesAsync } from "../review/orderChanges";
 import { classifyLayer } from "../graph/dependencyAnalyzer";
 import { buildFileUri } from "./gitlabContentProvider";
 import { getMrEditorReviewController } from "../review/reviewEditorRef";
@@ -161,7 +161,7 @@ export class MrTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
           return [err];
         }
       }
-      const ordered = orderChanges(cached.changes);
+      const ordered = await orderChangesAsync(cached.changes);
       for (const key of [...this.fileContextById.keys()]) {
         if (key.startsWith(`file:${cachedKey}:`)) {
           this.fileContextById.delete(key);

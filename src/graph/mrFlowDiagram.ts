@@ -1,29 +1,30 @@
 import type { FlowGraph, MergeRequestChange } from "../gitlab/types";
-import { buildDependencyEdgesSync, classifyLayer, layerRank, suggestReviewOrder } from "./dependencyAnalyzer";
+import {
+  buildDependencyEdgesSync,
+  classifyLayer,
+  contentForImportScan,
+  layerRank,
+  suggestReviewOrder,
+} from "./dependencyAnalyzer";
 import { effectivePath } from "./flowGraph";
 
-function approximateContentFromDiff(diff: string): string {
-  const lines: string[] = [];
-  for (const raw of diff.split("\n")) {
-    if (raw.startsWith("+++") || raw.startsWith("---")) {
+export function buildFlowGraphFromChanges(changes: MergeRequestChange[]): FlowGraph {
+  const paths: string[] = [];
+  const seen = new Set<string>();
+  for (const change of changes) {
+    const path = effectivePath(change);
+    if (!path || seen.has(path)) {
       continue;
     }
-    if (raw.startsWith("+") || raw.startsWith(" ")) {
-      lines.push(raw.slice(1));
-    }
+    seen.add(path);
+    paths.push(path);
   }
-  return lines.join("\n");
-}
-
-export function buildFlowGraphFromChanges(changes: MergeRequestChange[]): FlowGraph {
-  const paths = [...new Set(changes.map(effectivePath).filter(Boolean))];
   const changeByPath = new Map<string, MergeRequestChange>();
   for (const change of changes) {
     changeByPath.set(effectivePath(change), change);
   }
-  const edgesRaw = buildDependencyEdgesSync(paths, (path) =>
-    approximateContentFromDiff(changeByPath.get(path)?.diff ?? ""),
-  );
+  const readFile = (path: string) => contentForImportScan(changeByPath.get(path)?.diff ?? "");
+  const edgesRaw = buildDependencyEdgesSync(paths, readFile);
   const nodes = paths.map((path) => ({
     id: path,
     path,
@@ -35,7 +36,7 @@ export function buildFlowGraphFromChanges(changes: MergeRequestChange[]): FlowGr
     source: e.source,
     target: e.target,
   }));
-  return { nodes, edges, suggestedOrder: suggestReviewOrder(paths) };
+  return { nodes, edges, suggestedOrder: paths.length > 0 ? paths : suggestReviewOrder(paths, readFile) };
 }
 
 const LAYER_LABELS: Record<string, string> = {

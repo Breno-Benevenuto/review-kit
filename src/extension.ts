@@ -11,6 +11,7 @@ import {
 } from "./providers/mrTreeProvider";
 import { ReviewProgressProvider } from "./review/reviewProgress";
 import { createReviewSession, type ReviewSession } from "./review/reviewSession";
+import { orderChangesAsync } from "./review/orderChanges";
 import {
   getOutputChannel,
   gitlabBaseUrl,
@@ -37,6 +38,7 @@ import {
   commentNowOnLine,
   commentOnActiveEditorLine,
   commentOnLineAt,
+  openLineCommentComposer,
   promptAndPostLineThread,
   promptAndPostMrComment,
   resolveCommentTarget,
@@ -63,6 +65,8 @@ import { setMrEditorReviewController } from "./review/reviewEditorRef";
 import { getCurrentGitBranch } from "./review/gitBranch";
 import { reviewFilePosition, setDiffReviewOpen, stepReviewPath } from "./review/reviewFileNavigation";
 import { clearRawFileCache } from "./review/rawFileCache";
+import { collectChangedSymbolRefs } from "./review/changedSymbolRefs";
+import { openFileForAnalysis } from "./review/openFileForAnalysis";
 import { buildFlowGraphFromChanges } from "./graph/mrFlowDiagram";
 import {
   isValidMergeRequestSummary,
@@ -504,7 +508,8 @@ async function startVisualReview(
     } catch {
       /* keep list payload if detail fetch fails */
     }
-    const flowGraph = buildFlowGraphFromChanges(payload.changes);
+    const orderedChanges = await orderChangesAsync(payload.changes);
+    const flowGraph = buildFlowGraphFromChanges(orderedChanges);
     const session = createReviewSession(
       mr,
       payload.changes,
@@ -514,6 +519,7 @@ async function startVisualReview(
         start_sha: payload.diff_refs.start_sha,
       },
       { description, flowGraph },
+      orderedChanges,
     );
     activeSession = session;
     mrEditorReview?.setSession(session);
@@ -532,7 +538,6 @@ async function startVisualReview(
       handleVisualReviewMessage(msg, session, progress, mrTree),
     );
     await selectReviewFile(session, highlightPath);
-    setDiffReviewOpen(false);
     void refreshMrDiscussionsForSession(session);
     mrReviewStatusBar?.refresh();
   } catch (e) {
@@ -573,7 +578,6 @@ async function selectFileInReview(
     return;
   }
   const path = effectivePath(ctx.change);
-  VisualReviewPanel.current?.setActivePath(path);
   await selectReviewFile(session, path);
   mrReviewStatusBar?.refresh();
 }
@@ -583,12 +587,13 @@ async function openMrFileDiff(
   progress: ReviewProgressProvider,
   mrTree: MrTreeProvider,
 ): Promise<void> {
-  await selectFileInReview(ctx, progress, mrTree);
-  if (!activeSession) {
+  const session = await ensureReviewSessionForMr(ctx.mr, progress, mrTree);
+  if (!session) {
     return;
   }
   const path = effectivePath(ctx.change);
-  await openReviewDiff(activeSession, path);
+  await openReviewFile(session, path);
+  mrReviewStatusBar?.refresh();
 }
 
 function handleVisualReviewMessage(
@@ -605,15 +610,24 @@ function handleVisualReviewMessage(
 
   if (msg.type === "select" && msg.path) {
     active = msg.path;
-    panel.setActivePath(active);
     void selectReviewFile(session, active);
     mrReviewStatusBar?.refresh();
     return;
   }
-  if (msg.type === "openDiff") {
+  if (msg.type === "openFile" && msg.path) {
+    void openReviewFile(session, msg.path);
+    return;
+  }
+  if (msg.type === "openEditorDiff") {
     active = msg.path ?? active;
-    panel.setActivePath(active);
-    void openReviewDiff(session, active);
+    void openEditorDiffForPath(session, active);
+    return;
+  }
+  if (msg.type === "commentLineAt" && msg.path && msg.line) {
+    if (client) {
+      const side = msg.side === "old" ? "old" : "new";
+      void openLineCommentComposer(client, session, msg.path, msg.line, side);
+    }
     return;
   }
   if (msg.type === "prev") {
@@ -661,7 +675,7 @@ function handleVisualReviewMessage(
     const side = msg.side === "old" ? "old" : "new";
     panel.setActivePath(msg.path);
     void (async () => {
-      await openReviewDiff(session, msg.path);
+      await openReviewFile(session, msg.path);
       await revealMrLine(session, msg.path, msg.line, side);
     })();
     return;
@@ -675,8 +689,7 @@ function handleVisualReviewMessage(
     return;
   }
 
-  panel.setActivePath(active);
-  void openReviewDiff(session, active);
+  void selectReviewFile(session, active);
 }
 
 async function stepReviewInSession(
@@ -697,8 +710,7 @@ async function stepReviewInSession(
   if (next === current && delta !== 0) {
     return;
   }
-  panel?.setActivePath(next);
-  await openReviewDiff(activeSession, next);
+  await selectReviewFile(activeSession, next);
   const { index, total } = reviewFilePosition(activeSession, next);
   void vscode.window.setStatusBarMessage(`Review Kit: diff ${index}/${total}`, 2000);
 }
@@ -714,11 +726,39 @@ async function selectReviewFile(session: ReviewSession, path: string): Promise<v
     ? (await getCurrentGitBranch(folder.uri.fsPath)) === session.mr.source_branch
     : false;
   VisualReviewPanel.current?.setOnSourceBranch(onBranch);
+  VisualReviewPanel.current?.setSymbolRefs([]);
   VisualReviewPanel.current?.refresh();
   mrReviewStatusBar?.refresh();
 }
 
+async function openReviewFile(session: ReviewSession, path: string): Promise<void> {
+  await selectReviewFile(session, path);
+  const change = session.changeByPath.get(path);
+  if (!change || !client) {
+    return;
+  }
+  const ctx: MrTreeContext = {
+    kind: "file",
+    mr: session.mr,
+    change,
+    diffRefs: session.diffRefs,
+  };
+  const headUri = await openFileForAnalysis(client, session, ctx, mrEditorReview);
+  setDiffReviewOpen(true);
+  mrEditorReview?.syncFromActiveEditor();
+  mrReviewStatusBar?.refresh();
+  mrInlayHints?.refresh();
+  syncDraftCommentUi();
+  void refreshSymbolRefsForPath(session, path, headUri);
+  const { label } = reviewFilePosition(session, path);
+  void vscode.window.setStatusBarMessage(`Review Kit: ${label} · diff no painel`, 2500);
+}
+
 async function openReviewDiff(session: ReviewSession, path: string): Promise<void> {
+  await openReviewFile(session, path);
+}
+
+async function openEditorDiffForPath(session: ReviewSession, path: string): Promise<void> {
   await selectReviewFile(session, path);
   await openDiffForPath(session, path);
   setDiffReviewOpen(true);
@@ -727,7 +767,33 @@ async function openReviewDiff(session: ReviewSession, path: string): Promise<voi
   mrInlayHints?.refresh();
   syncDraftCommentUi();
   const { label } = reviewFilePosition(session, path);
-  void vscode.window.setStatusBarMessage(`Review Kit: diff · ${label}`, 2500);
+  void vscode.window.setStatusBarMessage(`Review Kit: diff no editor · ${label}`, 2500);
+}
+
+async function refreshSymbolRefsForPath(
+  session: ReviewSession,
+  path: string,
+  headUri?: vscode.Uri,
+): Promise<void> {
+  const panel = VisualReviewPanel.current;
+  if (!panel) {
+    return;
+  }
+  panel.setSymbolRefsLoading(true);
+  const change = session.changeByPath.get(path);
+  if (!change?.diff || !headUri) {
+    panel.setSymbolRefs([]);
+    return;
+  }
+  try {
+    const doc =
+      vscode.workspace.textDocuments.find((d) => d.uri.toString() === headUri.toString()) ??
+      (await vscode.workspace.openTextDocument(headUri));
+    const refs = await collectChangedSymbolRefs(doc, change.diff);
+    panel.setSymbolRefs(refs);
+  } catch {
+    panel.setSymbolRefs([]);
+  }
 }
 
 async function openDiffForPath(session: ReviewSession, path: string): Promise<void> {

@@ -130,15 +130,175 @@ export function buildDependencyEdgesSync(
   return edges;
 }
 
-export function suggestReviewOrder(paths: string[]): string[] {
-  return [...paths].sort((a, b) => {
-    const la = layerRank(classifyLayer(a));
-    const lb = layerRank(classifyLayer(b));
-    if (la !== lb) {
-      return la - lb;
+export function contentForImportScan(contentOrDiff: string): string {
+  if (!contentOrDiff.includes("\n+++") && !contentOrDiff.includes("\n@@")) {
+    return contentOrDiff;
+  }
+  const lines: string[] = [];
+  for (const raw of contentOrDiff.split("\n")) {
+    if (raw.startsWith("+++") || raw.startsWith("---")) {
+      continue;
     }
-    return a.localeCompare(b);
+    if (raw.startsWith("+") || raw.startsWith(" ")) {
+      lines.push(raw.slice(1));
+    }
+  }
+  return lines.join("\n");
+}
+
+const DEFERRED_CONFIG_EXT = /\.(json|xml|yaml|yml)$/i;
+
+export function isDeferredReviewPath(filePath: string): boolean {
+  const norm = filePath.replace(/\\/g, "/");
+  const base = norm.split("/").pop() ?? norm;
+  if (DEFERRED_CONFIG_EXT.test(base)) {
+    return true;
+  }
+  if (/(^|\/)tests?(\/|$)/i.test(norm)) {
+    return true;
+  }
+  if (/(^|\/)__tests__(\/|$)/.test(norm)) {
+    return true;
+  }
+  if (/(^|\/)test(\/|$)/i.test(norm) && /\.(java|kt|scala|go)$/.test(base)) {
+    return true;
+  }
+  if (/Test\.(java|kt|scala)$/.test(base)) {
+    return true;
+  }
+  if (/Tests\.(java|kt)$/.test(base)) {
+    return true;
+  }
+  if (/\.(spec|test)\.(ts|tsx|js|jsx|mjs|cjs)$/.test(base)) {
+    return true;
+  }
+  if (/_test\.go$/.test(base)) {
+    return true;
+  }
+  if (/(^|\/)spec(\/|$)/i.test(norm) && /\.(ts|tsx|js|jsx)$/.test(base)) {
+    return true;
+  }
+  return false;
+}
+
+function deferredSortKey(path: string): number {
+  const base = path.split("/").pop() ?? path;
+  if (DEFERRED_CONFIG_EXT.test(base)) {
+    return 0;
+  }
+  return 1;
+}
+
+function compareLayerThenPath(a: string, b: string): number {
+  const la = layerRank(classifyLayer(a));
+  const lb = layerRank(classifyLayer(b));
+  if (la !== lb) {
+    return la - lb;
+  }
+  return a.localeCompare(b);
+}
+
+export function mergeReviewEdges(
+  ...groups: { source: string; target: string }[][]
+): { source: string; target: string }[] {
+  const keys = new Set<string>();
+  const merged: { source: string; target: string }[] = [];
+  for (const group of groups) {
+    for (const edge of group) {
+      const key = `${edge.source}\t${edge.target}`;
+      if (keys.has(key) || edge.source === edge.target) {
+        continue;
+      }
+      keys.add(key);
+      merged.push(edge);
+    }
+  }
+  return merged;
+}
+
+function topologicalCallerFirstOrder(
+  paths: string[],
+  edges: { source: string; target: string }[],
+): string[] {
+  if (paths.length <= 1) {
+    return [...paths];
+  }
+  const pathSet = new Set(paths);
+  const inDegree = new Map<string, number>();
+  const outgoing = new Map<string, string[]>();
+  for (const p of paths) {
+    inDegree.set(p, 0);
+    outgoing.set(p, []);
+  }
+  for (const { source, target } of edges) {
+    if (!pathSet.has(source) || !pathSet.has(target)) {
+      continue;
+    }
+    inDegree.set(target, (inDegree.get(target) ?? 0) + 1);
+    outgoing.get(source)!.push(target);
+  }
+  const ready = paths.filter((p) => (inDegree.get(p) ?? 0) === 0).sort(compareLayerThenPath);
+  const ordered: string[] = [];
+  while (ready.length > 0) {
+    const next = ready.shift()!;
+    ordered.push(next);
+    for (const target of outgoing.get(next) ?? []) {
+      const deg = (inDegree.get(target) ?? 0) - 1;
+      inDegree.set(target, deg);
+      if (deg === 0) {
+        insertSorted(ready, target, compareLayerThenPath);
+      }
+    }
+  }
+  if (ordered.length < paths.length) {
+    const remaining = paths.filter((p) => !ordered.includes(p)).sort(compareLayerThenPath);
+    ordered.push(...remaining);
+  }
+  return ordered;
+}
+
+function insertSorted(list: string[], value: string, compare: (a: string, b: string) => number): void {
+  let i = 0;
+  while (i < list.length && compare(list[i], value) < 0) {
+    i++;
+  }
+  list.splice(i, 0, value);
+}
+
+export function suggestReviewOrder(
+  paths: string[],
+  readFile?: (path: string) => string,
+  referenceEdges?: { source: string; target: string }[],
+): string[] {
+  const read = readFile ?? (() => "");
+  const primary = paths.filter((p) => !isDeferredReviewPath(p));
+  const deferred = paths.filter((p) => isDeferredReviewPath(p));
+  const importEdges = buildDependencyEdgesSync(primary, (p) => contentForImportScan(read(p)));
+  const edges = mergeReviewEdges(importEdges, referenceEdges ?? []);
+  const orderedPrimary = topologicalCallerFirstOrder(primary, edges);
+  const orderedDeferred = [...deferred].sort((a, b) => {
+    const da = deferredSortKey(a);
+    const db = deferredSortKey(b);
+    if (da !== db) {
+      return da - db;
+    }
+    return compareLayerThenPath(a, b);
   });
+  const seen = new Set<string>();
+  const merged: string[] = [];
+  for (const p of [...orderedPrimary, ...orderedDeferred]) {
+    if (seen.has(p)) {
+      continue;
+    }
+    seen.add(p);
+    merged.push(p);
+  }
+  for (const p of paths) {
+    if (!seen.has(p)) {
+      merged.push(p);
+    }
+  }
+  return merged;
 }
 
 export { LAYER_RANK };
