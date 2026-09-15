@@ -96,32 +96,37 @@ npm run install:cursor
 
 ## ⚙️ Configuração
 
-### Token do GitLab (igual ao MCP)
+### Token do GitLab
 
-O MCP remoto usa `Authorization: Bearer`; a **API REST** do GitLab (como este plugin) usa **`PRIVATE-TOKEN`** — tokens **novos** (sem prefixo `glpat-`) funcionam.
+1. No GitLab, crie um **access token** com `read_api` (e escopos de escrita se for comentar ou aprovar MR).
+2. Informe o token de um destes jeitos:
+   - variável **`GITLAB_TOKEN`** em `~/.cursor/.env.cursor` (ou no ambiente), ou
+   - comando **Review Kit: Configure GitLab Token** (ícone de chave na sidebar **Merge Requests**).
+3. **Recarregar token GitLab** depois de editar o arquivo; em seguida **Refresh Merge Requests**.
 
-1. Em `~/.cursor/.env.cursor`:
+Tokens atuais do GitLab (com ou sem prefixo `glpat-`) são aceitos.
 
-```bash
-export GITLAB_TOKEN=seu-token-aqui
-export GITLAB_URL=https://gitlab.sua-empresa.com
+### URL do GitLab
+
+Se a instância **não** for gitlab.com, defina `reviewKit.gitlabUrl` ou abra o repo com `git remote` apontando para o seu GitLab. Remotes SSH `git@gitlabssh…` são mapeados para a API HTTPS em `https://gitlab…` (mesmo domínio, sem o sufixo `ssh`).
+
+```json
+{
+  "reviewKit.gitlabUrl": "https://gitlab.sua-empresa.com"
+}
 ```
 
-(`GITLAB_URL` é opcional se o `git remote origin` for `git@gitlabssh…` — o Review Kit usa o host HTTPS `gitlab…` na API.)
-
-2. **Recarregar token GitLab** ou reinstalar a extensão; **Refresh Merge Requests**.
-
-3. Ou **Configure GitLab Token** na sidebar (ícone de chave) para salvar no Secret Storage.
-
-Escopos: `api` ou `read_api` (+ escrita para comentários/approve).
-
-**GitLab corporativo (`.local`):** o Node no Cursor pode falhar no certificado; TLS relaxado automático em hosts `.local`. Setting: `reviewKit.gitlabInsecureTls`. HTTP via `curl` em `.local` (`reviewKit.gitlabHttpTransport`).
+(Opcional) Projeto fixo quando o workspace não bate com o remote:
 
 ```json
 {
   "reviewKit.projectPath": "grupo/repositorio"
 }
 ```
+
+### GitLab self-managed (`.local`)
+
+Em hosts `.local`, o Cursor pode falhar no certificado TLS. A extensão relaxa TLS automaticamente (`reviewKit.gitlabInsecureTls`) e pode usar `curl` para HTTP (`reviewKit.gitlabHttpTransport`).
 
 ---
 
@@ -195,7 +200,7 @@ Comandos de diff/comentário exigem contexto `reviewKit.mrReviewActive` (diff ou
 
 | Setting | Default | Descrição |
 |---------|---------|-----------|
-| `reviewKit.gitlabUrl` | *(vazio)* | Se vazio: `GITLAB_URL`, depois host do `origin`, depois gitlab.com |
+| `reviewKit.gitlabUrl` | *(vazio)* | Vazio: host inferido do `git remote` (HTTPS); senão `https://gitlab.com` |
 | `reviewKit.projectPath` | `""` | `group/repo`; vazio = origin do workspace |
 | `reviewKit.diffInline` | `false` | Diff unificado (inline) vs side-by-side |
 | `reviewKit.openProjectEditorForNavigation` | `true` | Abre cópia do arquivo ao lado do diff para LSP/Go to Definition |

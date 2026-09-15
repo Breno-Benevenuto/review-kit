@@ -31,7 +31,7 @@
         "reviewKit.gitlabUrl": {
           "type": "string",
           "default": "",
-          "description": "URL base do GitLab (sem / final). Vazio = GITLAB_URL (.env.cursor, igual MCP), depois host do git remote origin, depois gitlab.com."
+          "description": "URL base do GitLab (sem / final). Vazio = host inferido do git remote origin, depois gitlab.com."
         },
         "reviewKit.projectPath": {
           "type": "string",
@@ -97,7 +97,7 @@
     "viewsWelcome": [
       {
         "view": "reviewKit.mrs",
-        "contents": "Use **GITLAB_TOKEN** em `~/.cursor/.env.cursor` (mesmo padrão do MCP).\n\n[$(key) Configure GitLab Token](command:reviewKit.configureToken)\n\nURL: vazio = `GITLAB_URL` ou host HTTPS inferido do `git remote` (SSH `gitlabssh` → API `gitlab`)."
+        "contents": "Defina **GITLAB_TOKEN** em `~/.cursor/.env.cursor` ou use o botão abaixo.\n\n[$(key) Configure GitLab Token](command:reviewKit.configureToken)\n\nURL: `reviewKit.gitlabUrl` ou inferida do `git remote` (`gitlabssh` → API `gitlab`)."
       }
     ],
     "views": {
