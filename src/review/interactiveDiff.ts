@@ -1,4 +1,3 @@
-import * as path from "node:path";
 import * as vscode from "vscode";
 import type { GitLabClient } from "../gitlab/client";
 import { resolveProjectIdForMr } from "../gitlab/projectContext";
@@ -8,9 +7,14 @@ import { buildFileUri } from "../providers/gitlabContentProvider";
 import { revealProjectFileBesideDiff } from "./diffFocus";
 import { openSideBySideColoredDiff } from "./diffEditorEnhancer";
 import type { MrEditorReviewController } from "./mrEditorReview";
-import { getCurrentGitBranch } from "./gitBranch";
 import type { ReviewSession } from "./reviewSession";
 import { getRawFileCached, rawFileCacheKey } from "./rawFileCache";
+import {
+  ensureReviewKitGitignore,
+  resolveMrHeadUriForEditor,
+  writeMrCacheFile,
+  workspaceFolderForRepoPath,
+} from "./mrEditorUri";
 
 export async function openInteractiveFileDiff(
   client: GitLabClient,
@@ -21,7 +25,7 @@ export async function openInteractiveFileDiff(
   const filePath = effectivePath(ctx.change);
   const diff = ctx.change.diff ?? "";
   const title = `${filePath} (MR !${ctx.mr.iid})`;
-  const folder = vscode.workspace.workspaceFolders?.[0];
+  const folder = await workspaceFolderForRepoPath(filePath);
 
   if (!folder) {
     await openVirtualDiff(ctx, filePath, title, reviewEditor);
@@ -43,22 +47,13 @@ export async function openInteractiveFileDiff(
     ),
   ]);
 
-  const leftUri = await writeUnder(cacheRoot, "base", filePath, baseContent);
-  const onSourceBranch = (await getCurrentGitBranch(folder.uri.fsPath)) === ctx.mr.source_branch;
-  const workspaceFile = vscode.Uri.joinPath(folder.uri, ...filePath.split("/"));
-
-  let rightUri: vscode.Uri;
-  if (onSourceBranch) {
-    try {
-      await vscode.workspace.fs.stat(workspaceFile);
-      rightUri = workspaceFile;
-    } catch {
-      rightUri = await writeUnder(cacheRoot, "head", filePath, headContent);
-    }
-  } else {
-    rightUri = await writeUnder(cacheRoot, "head", filePath, headContent);
-  }
-
+  const leftUri = await writeMrCacheFile(cacheRoot, "base", filePath, baseContent);
+  const rightUri = await resolveMrHeadUriForEditor(
+    filePath,
+    ctx.mr.source_branch,
+    headContent,
+    cacheRoot,
+  );
   await openSideBySideColoredDiff({
     left: leftUri,
     right: rightUri,
@@ -73,12 +68,6 @@ export async function openInteractiveFileDiff(
     await revealProjectFileBesideDiff(session, filePath, rightUri);
   }
 
-  if (!onSourceBranch) {
-    void vscode.window.setStatusBarMessage(
-      `Review Kit: checkout \`${ctx.mr.source_branch}\` para navegar no código como no projeto (Go to Definition)`,
-      8000,
-    );
-  }
 }
 
 async function openVirtualDiff(
@@ -100,22 +89,3 @@ async function openVirtualDiff(
   });
 }
 
-async function writeUnder(root: vscode.Uri, side: "base" | "head", filePath: string, content: string): Promise<vscode.Uri> {
-  const target = vscode.Uri.joinPath(root, side, ...filePath.split("/"));
-  const dir = vscode.Uri.file(path.dirname(target.fsPath));
-  await vscode.workspace.fs.createDirectory(dir);
-  await vscode.workspace.fs.writeFile(target, Buffer.from(content, "utf8"));
-  return target;
-}
-
-async function ensureReviewKitGitignore(workspaceRoot: vscode.Uri): Promise<void> {
-  const kitDir = vscode.Uri.joinPath(workspaceRoot, ".review-kit");
-  const ignoreFile = vscode.Uri.joinPath(kitDir, ".gitignore");
-  try {
-    await vscode.workspace.fs.stat(ignoreFile);
-    return;
-  } catch {
-    await vscode.workspace.fs.createDirectory(kitDir);
-    await vscode.workspace.fs.writeFile(ignoreFile, Buffer.from("*\n!.gitignore\n", "utf8"));
-  }
-}

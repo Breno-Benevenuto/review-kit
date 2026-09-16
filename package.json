@@ -51,7 +51,7 @@
         "reviewKit.openProjectEditorForNavigation": {
           "type": "boolean",
           "default": true,
-          "description": "Ao abrir o diff, abre também o arquivo do MR em aba normal (Go to Definition, métodos, LSP)."
+          "description": "No diff do editor, abre o arquivo do workspace ao lado quando o lado modificado veio do cache (Go to Definition / LSP)."
         },
         "reviewKit.preferGitLabTokenFromEnv": {
           "type": "boolean",
@@ -183,6 +183,18 @@
         "command": "reviewKit.toggleReviewedInDiff",
         "title": "Review Kit: Marcar / desmarcar revisado",
         "enablement": "reviewKit.mrReviewActive"
+      },
+      {
+        "command": "reviewKit.markFileReviewed",
+        "title": "Marcar revisado",
+        "icon": "$(circle-outline)",
+        "enablement": "reviewKit.mrReviewActive && !reviewKit.activeFileReviewed"
+      },
+      {
+        "command": "reviewKit.unmarkFileReviewed",
+        "title": "Revisado",
+        "icon": "$(check)",
+        "enablement": "reviewKit.mrReviewActive && reviewKit.activeFileReviewed"
       },
       {
         "command": "reviewKit.startReview",
@@ -323,8 +335,13 @@
           "group": "navigation@0"
         },
         {
-          "command": "reviewKit.toggleReviewedInDiff",
-          "when": "reviewKit.mrReviewActive",
+          "command": "reviewKit.markFileReviewed",
+          "when": "reviewKit.mrReviewActive && !reviewKit.activeFileReviewed",
+          "group": "navigation@0"
+        },
+        {
+          "command": "reviewKit.unmarkFileReviewed",
+          "when": "reviewKit.mrReviewActive && reviewKit.activeFileReviewed",
           "group": "navigation@0"
         },
         {

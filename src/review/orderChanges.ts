@@ -30,12 +30,17 @@ export function orderChanges(
   return mapOrderToChanges(order, byPath);
 }
 
+const MAX_CALL_GRAPH_FILES = 24;
+
 export async function orderChangesAsync(changes: MergeRequestChange[]): Promise<MergeRequestChange[]> {
   const byPath = new Map<string, MergeRequestChange>();
   for (const change of changes) {
     byPath.set(effectivePath(change), change);
   }
   const paths = [...byPath.keys()];
+  if (paths.length > MAX_CALL_GRAPH_FILES) {
+    return orderChanges(changes);
+  }
   const readFile = (path: string) => byPath.get(path)?.diff ?? "";
   let referenceEdges: { source: string; target: string }[] = [];
   try {

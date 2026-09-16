@@ -118,6 +118,12 @@ export class VisualReviewPanel {
     return this.state.session;
   }
 
+  updateSession(session: ReviewSession, reviewedPaths: Set<string>): void {
+    this.state.session = session;
+    this.state.reviewedPaths = new Set(reviewedPaths);
+    this.render();
+  }
+
   refresh(): void {
     this.render();
   }

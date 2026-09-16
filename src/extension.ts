@@ -11,7 +11,7 @@ import {
 } from "./providers/mrTreeProvider";
 import { ReviewProgressProvider } from "./review/reviewProgress";
 import { createReviewSession, type ReviewSession } from "./review/reviewSession";
-import { orderChangesAsync } from "./review/orderChanges";
+import { orderChanges, orderChangesAsync } from "./review/orderChanges";
 import {
   getOutputChannel,
   gitlabBaseUrl,
@@ -30,7 +30,7 @@ import {
 } from "./gitlab/projectContext";
 import { callMergeRequestApi, formatMrGitLabActionError } from "./gitlab/mrApiRoute";
 import { VisualReviewPanel, type WebviewRequest } from "./webview/visualReviewPanel";
-import type { MergeRequestSummary } from "./gitlab/types";
+import type { MergeRequestChange, MergeRequestSummary } from "./gitlab/types";
 import {
   cancelReviewDraftSession,
   commentErrorMessage,
@@ -70,6 +70,7 @@ import {
   clearMrDiscussionsCache,
   setMrDiscussionsCache,
 } from "./review/mrDiscussionsCache";
+import { registerMrReviewCodeLens, type MrReviewCodeLensProvider } from "./review/mrReviewCodeLens";
 import { MrReviewStatusBar, resolveActiveReviewFilePath } from "./review/mrReviewStatusBar";
 import { setMrEditorReviewController } from "./review/reviewEditorRef";
 import { getCurrentGitBranch } from "./review/gitBranch";
@@ -91,6 +92,7 @@ let output = getOutputChannel();
 let activeSession: ReviewSession | undefined;
 let mrEditorReview: MrEditorReviewController | undefined;
 let mrReviewStatusBar: MrReviewStatusBar | undefined;
+let mrReviewCodeLens: MrReviewCodeLensProvider | undefined;
 let mrInlayHints: MrReviewInlayHintsProvider | undefined;
 let draftCommentThreads: DraftCommentThreadController | undefined;
 let mrDiscussionComments: MrDiscussionCommentThreadsController | undefined;
@@ -109,9 +111,15 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   setMrDiscussionsRefreshHandler((session) => {
     void refreshMrDiscussionsForSession(session);
   });
+  mrReviewCodeLens = registerMrReviewCodeLens(
+    context,
+    () => activeSession,
+    (session, path) => progress.isReviewed(session.mr, path),
+  );
   mrReviewStatusBar = new MrReviewStatusBar(
     () => activeSession,
     (session, path) => progress.isReviewed(session.mr, path),
+    () => mrReviewCodeLens?.refresh(),
   );
   mrReviewStatusBar.bind(context);
   const mrTree = new MrTreeProvider(
@@ -154,6 +162,7 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         return;
       }
       lastTreeClick = { id: item.id, kind: "mr", at: now };
+      void prefetchMrChanges(mr, mrTree);
       return;
     }
     if (item.contextValue !== "changedFile") {
@@ -187,14 +196,17 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void vscode.window.showInformationMessage("Review Kit: token GitLab recarregado.");
       });
     }),
-    vscode.commands.registerCommand("reviewKit.openVisualReview", (arg?: string | MergeRequestSummary) => {
-      const mr = resolveMergeRequestForCommand(arg, mrTree, mrTreeView);
-      if (!mr) {
-        void vscode.window.showWarningMessage("Selecione um MR na árvore Review Kit.");
-        return;
-      }
-      void startVisualReview(mr, progress, mrTree);
-    }),
+    vscode.commands.registerCommand(
+      "reviewKit.openVisualReview",
+      async (arg?: string | MergeRequestSummary | vscode.TreeItem) => {
+        const mr = await resolveMergeRequestForOpen(arg, mrTree, mrTreeView);
+        if (!mr) {
+          void vscode.window.showWarningMessage("Selecione um MR na árvore Review Kit.");
+          return;
+        }
+        void startVisualReview(mr, progress, mrTree);
+      },
+    ),
     vscode.commands.registerCommand("reviewKit.openVisualReviewFile", (ctx: MrTreeContext) => {
       if (ctx.kind === "file") {
         void openMrFileDiff(ctx, progress, mrTree);
@@ -319,26 +331,13 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
       void vscode.commands.executeCommand("workbench.action.compareEditor.previousChange"),
     ),
     vscode.commands.registerCommand("reviewKit.toggleReviewedInDiff", () => {
-      if (!activeSession) {
-        void vscode.window.showWarningMessage("Abra a revisão visual de um MR primeiro.");
-        return;
-      }
-      const path = resolveActiveReviewFilePath(activeSession);
-      if (!path) {
-        void vscode.window.showWarningMessage(
-          "Foque o diff do arquivo (painel direito) ou selecione-o na fila.",
-        );
-        return;
-      }
-      const reviewed = progress.toggleReviewed(activeSession.mr, path);
-      mrTree.refresh();
-      syncReviewedPanel(activeSession.mr, progress);
-      mrReviewStatusBar?.refresh();
-      const name = path.split("/").pop() ?? path;
-      void vscode.window.setStatusBarMessage(
-        reviewed ? `Review Kit: ${name} marcado como revisado` : `Review Kit: ${name} desmarcado`,
-        3000,
-      );
+      toggleReviewedForActiveFile(progress, mrTree);
+    }),
+    vscode.commands.registerCommand("reviewKit.markFileReviewed", () => {
+      toggleReviewedForActiveFile(progress, mrTree);
+    }),
+    vscode.commands.registerCommand("reviewKit.unmarkFileReviewed", () => {
+      toggleReviewedForActiveFile(progress, mrTree);
     }),
   );
 
@@ -513,6 +512,67 @@ async function refreshMrs(mrTree: MrTreeProvider): Promise<void> {
   }
 }
 
+async function prefetchMrChanges(mr: MergeRequestSummary, mrTree: MrTreeProvider): Promise<void> {
+  const gitlab = client;
+  if (!gitlab || mrTree.getCachedChanges(mr)) {
+    return;
+  }
+  try {
+    const projectId = resolveProjectIdForMr(mr.project_id);
+    const workspaceId = getActiveGitLabProject()?.id;
+    const payload = await gitlab.getMergeRequestChangesWithFallback(projectId, mr.iid, workspaceId);
+    mrTree.cacheChanges(
+      mr,
+      payload.changes,
+      payload.diff_refs.base_sha,
+      payload.diff_refs.head_sha,
+      payload.diff_refs.start_sha,
+    );
+  } catch {
+    /* prefetch is best-effort */
+  }
+}
+
+function refineReviewOrderInBackground(
+  mr: MergeRequestSummary,
+  changes: MergeRequestChange[],
+  progress: ReviewProgressProvider,
+): void {
+  void (async () => {
+    try {
+      const ordered = await orderChangesAsync(changes);
+      if (!activeSession || mrKey(activeSession.mr) !== mrKey(mr)) {
+        return;
+      }
+      const before = activeSession.cards.map((c) => c.path).join("\0");
+      const after = ordered.map((c) => effectivePath(c)).join("\0");
+      if (before === after) {
+        return;
+      }
+      const activePath = VisualReviewPanel.current?.getActivePath();
+      const newSession = createReviewSession(
+        activeSession.mr,
+        changes,
+        activeSession.diffRefs,
+        { description: activeSession.mrDescription, flowGraph: activeSession.flowGraph },
+        ordered,
+      );
+      activeSession = newSession;
+      mrEditorReview?.setSession(newSession);
+      const reviewed = new Set(
+        newSession.cards.filter((c) => progress.isReviewed(mr, c.path)).map((c) => c.path),
+      );
+      VisualReviewPanel.current?.updateSession(newSession, reviewed);
+      if (activePath && newSession.changeByPath.has(activePath)) {
+        VisualReviewPanel.current?.setActivePath(activePath);
+      }
+      mrReviewStatusBar?.refresh();
+    } catch {
+      /* keep import-based order */
+    }
+  })();
+}
+
 async function startVisualReview(
   mr: MergeRequestSummary,
   progress: ReviewProgressProvider,
@@ -533,16 +593,21 @@ async function startVisualReview(
     const projectId = resolveProjectIdForMr(mr.project_id);
     const workspaceId = getActiveGitLabProject()?.id;
     const cached = mrTree.getCachedChanges(mr);
-    const payload = cached
-      ? {
+    const changesPromise = cached
+      ? Promise.resolve({
           changes: cached.changes,
           diff_refs: {
             base_sha: cached.base_sha,
             head_sha: cached.head_sha,
             start_sha: cached.start_sha,
           },
-        }
-      : await client.getMergeRequestChangesWithFallback(projectId, mr.iid, workspaceId);
+        })
+      : client.getMergeRequestChangesWithFallback(projectId, mr.iid, workspaceId);
+    const hasDescription = (mr.description ?? "").trim().length > 0;
+    const mrDetailPromise = hasDescription
+      ? Promise.resolve(null)
+      : callMergeRequestApi(mr, (pid) => client!.getMergeRequest(pid, mr.iid)).catch(() => null);
+    const [payload, fullMr] = await Promise.all([changesPromise, mrDetailPromise]);
     if (!cached) {
       mrTree.cacheChanges(
         mr,
@@ -553,14 +618,11 @@ async function startVisualReview(
       );
     }
     let description = (mr.description ?? "").trim();
-    try {
-      const full = await callMergeRequestApi(mr, (pid) => client!.getMergeRequest(pid, mr.iid));
-      mr = normalizeMergeRequestSummary({ ...mr, ...full });
-      description = (full.description ?? "").trim();
-    } catch {
-      /* keep list payload if detail fetch fails */
+    if (fullMr) {
+      mr = normalizeMergeRequestSummary({ ...mr, ...fullMr });
+      description = (fullMr.description ?? "").trim();
     }
-    const orderedChanges = await orderChangesAsync(payload.changes);
+    const orderedChanges = orderChanges(payload.changes);
     const flowGraph = buildFlowGraphFromChanges(orderedChanges);
     const session = createReviewSession(
       mr,
@@ -587,11 +649,15 @@ async function startVisualReview(
     const reviewed = new Set(
       session.cards.filter((c) => progress.isReviewed(mr, c.path)).map((c) => c.path),
     );
-    VisualReviewPanel.open(session, highlightPath, reviewed, (msg) =>
-      handleVisualReviewMessage(msg, session, progress, mrTree),
-    );
-    await selectReviewFile(session, highlightPath);
+    VisualReviewPanel.open(session, highlightPath, reviewed, (msg) => {
+      const current = activeSession;
+      if (current) {
+        handleVisualReviewMessage(msg, current, progress, mrTree);
+      }
+    });
+    void selectReviewFile(session, highlightPath);
     void refreshMrDiscussionsForSession(session);
+    refineReviewOrderInBackground(mr, payload.changes, progress);
     mrReviewStatusBar?.refresh();
   } catch (e) {
     const msg = e instanceof GitLabApiError ? formatGitLabError(e, mr) : String(e);
@@ -797,14 +863,20 @@ async function selectReviewFile(session: ReviewSession, path: string): Promise<v
     mrEditorReview?.focusFile(path, change.diff ?? "");
   }
   VisualReviewPanel.current?.setActivePath(path);
-  const folder = vscode.workspace.workspaceFolders?.[0];
-  const onBranch = folder
-    ? (await getCurrentGitBranch(folder.uri.fsPath)) === session.mr.source_branch
-    : false;
-  VisualReviewPanel.current?.setOnSourceBranch(onBranch);
   VisualReviewPanel.current?.setSymbolRefs([]);
   VisualReviewPanel.current?.refresh();
   mrReviewStatusBar?.refresh();
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) {
+    VisualReviewPanel.current?.setOnSourceBranch(false);
+    return;
+  }
+  void getCurrentGitBranch(folder.uri.fsPath).then((branch) => {
+    if (VisualReviewPanel.current?.getSession() !== session) {
+      return;
+    }
+    VisualReviewPanel.current?.setOnSourceBranch(branch === session.mr.source_branch);
+  });
 }
 
 async function openReviewFile(session: ReviewSession, path: string): Promise<void> {
@@ -891,6 +963,32 @@ async function openDiffForPath(session: ReviewSession, path: string): Promise<vo
   setDiffReviewOpen(true);
   mrEditorReview?.syncFromActiveEditor();
   mrReviewStatusBar?.refresh();
+}
+
+function toggleReviewedForActiveFile(
+  progress: ReviewProgressProvider,
+  mrTree: MrTreeProvider,
+): void {
+  if (!activeSession) {
+    void vscode.window.showWarningMessage("Abra a revisão visual de um MR primeiro.");
+    return;
+  }
+  const path = resolveActiveReviewFilePath(activeSession);
+  if (!path) {
+    void vscode.window.showWarningMessage(
+      "Foque o arquivo do MR no editor (duplo clique na fila) ou selecione-o na fila.",
+    );
+    return;
+  }
+  const reviewed = progress.toggleReviewed(activeSession.mr, path);
+  mrTree.refresh();
+  syncReviewedPanel(activeSession.mr, progress);
+  mrReviewStatusBar?.refresh();
+  const name = path.split("/").pop() ?? path;
+  void vscode.window.setStatusBarMessage(
+    reviewed ? `Review Kit: ${name} marcado como revisado` : `Review Kit: ${name} desmarcado`,
+    3000,
+  );
 }
 
 function syncReviewedPanel(mr: MergeRequestSummary, progress: ReviewProgressProvider): void {
@@ -1073,26 +1171,79 @@ async function pickOpenMergeRequest(): Promise<MergeRequestSummary | undefined> 
   return pick?.mr;
 }
 
+function mrFromTreeItem(
+  item: vscode.TreeItem,
+  mrTree: MrTreeProvider,
+): MergeRequestSummary | undefined {
+  const ctx = mrTree.getMrContext(item);
+  if (ctx) {
+    return ctx.mr;
+  }
+  if (item.contextValue === "mr" && item.id) {
+    return mrTree.getMr(item.id);
+  }
+  return undefined;
+}
+
 function resolveMergeRequestForCommand(
-  arg: string | MergeRequestSummary | undefined,
+  arg: string | MergeRequestSummary | vscode.TreeItem | undefined,
   mrTree: MrTreeProvider,
   treeView: vscode.TreeView<vscode.TreeItem>,
 ): MergeRequestSummary | undefined {
   if (typeof arg === "string") {
     return mrTree.getMr(arg);
   }
-  if (isValidMergeRequestSummary(arg)) {
-    return arg;
+  if (arg && typeof arg === "object" && "contextValue" in arg) {
+    const fromItem = mrFromTreeItem(arg as vscode.TreeItem, mrTree);
+    if (fromItem) {
+      return fromItem;
+    }
   }
-  if (arg && typeof arg === "object") {
+  if (isValidMergeRequestSummary(arg as MergeRequestSummary | undefined)) {
+    return arg as MergeRequestSummary;
+  }
+  if (arg && typeof arg === "object" && !("contextValue" in arg)) {
     const normalized = normalizeMergeRequestSummary(arg as MergeRequestSummary);
     if (isValidMergeRequestSummary(normalized)) {
       return normalized;
     }
   }
   const selected = treeView.selection[0];
-  if (selected?.contextValue === "mr" && selected.id) {
-    return mrTree.getMr(selected.id);
+  if (selected) {
+    const fromSelection = mrFromTreeItem(selected, mrTree);
+    if (fromSelection) {
+      return fromSelection;
+    }
+  }
+  if (activeSession && isValidMergeRequestSummary(activeSession.mr)) {
+    return activeSession.mr;
   }
   return undefined;
+}
+
+async function resolveMergeRequestForOpen(
+  arg: string | MergeRequestSummary | vscode.TreeItem | undefined,
+  mrTree: MrTreeProvider,
+  treeView: vscode.TreeView<vscode.TreeItem>,
+): Promise<MergeRequestSummary | undefined> {
+  const direct = resolveMergeRequestForCommand(arg, mrTree, treeView);
+  if (direct) {
+    return direct;
+  }
+  const cached = mrTree.listOpenMrs();
+  if (cached.length === 1) {
+    return cached[0];
+  }
+  if (cached.length > 1) {
+    const pick = await vscode.window.showQuickPick(
+      cached.map((mr) => ({
+        label: mr.references?.full ?? `!${mr.iid}`,
+        description: mr.title,
+        mr,
+      })),
+      { placeHolder: "Selecione o merge request" },
+    );
+    return pick?.mr;
+  }
+  return pickOpenMergeRequest();
 }

@@ -1,6 +1,7 @@
 import * as vscode from "vscode";
 import type { ReviewSession } from "./reviewSession";
 import { matchMrFilePath } from "./mrComments";
+import { findExistingWorkspaceUriForRepoPath } from "./mrEditorUri";
 
 export async function closeOtherMrDiffTabs(keepTitle?: string): Promise<void> {
   const toClose: vscode.Tab[] = [];
@@ -52,17 +53,10 @@ export async function revealProjectFileBesideDiff(
   if (!cfg.get<boolean>("openProjectEditorForNavigation", true)) {
     return;
   }
-  const folder = vscode.workspace.workspaceFolders?.[0];
-  if (!folder) {
+  const workspaceFile = await findExistingWorkspaceUriForRepoPath(filePath);
+  const target = workspaceFile ?? headUri;
+  if (workspaceFile && workspaceFile.toString() === headUri.toString()) {
     return;
-  }
-  const workspaceFile = vscode.Uri.joinPath(folder.uri, ...filePath.split("/"));
-  let target = headUri;
-  try {
-    await vscode.workspace.fs.stat(workspaceFile);
-    target = workspaceFile;
-  } catch {
-    target = headUri;
   }
   const column =
     vscode.window.activeTextEditor?.viewColumn ?? vscode.ViewColumn.Two;

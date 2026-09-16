@@ -14,6 +14,7 @@ export class MrReviewStatusBar implements vscode.Disposable {
   constructor(
     private readonly getSession: () => ReviewSession | undefined,
     private readonly isPathReviewed: (session: ReviewSession, path: string) => boolean,
+    private readonly onAfterRefresh?: () => void,
   ) {
     this.prevItem.command = "reviewKit.reviewPrevFile";
     this.nextItem.command = "reviewKit.reviewNextFile";
@@ -70,6 +71,7 @@ export class MrReviewStatusBar implements vscode.Disposable {
     this.nextItem.show();
 
     const reviewed = this.isPathReviewed(session, filePath);
+    void vscode.commands.executeCommand("setContext", "reviewKit.activeFileReviewed", reviewed);
     this.reviewedItem.text = reviewed
       ? "$(check) Revisado"
       : "$(circle-outline) Marcar revisado";
@@ -80,9 +82,11 @@ export class MrReviewStatusBar implements vscode.Disposable {
     this.noteItem.text = `$(note) ${ref}`;
     this.noteItem.tooltip = "Nota geral no MR";
     this.noteItem.show();
+    this.onAfterRefresh?.();
   }
 
   private hideAll(): void {
+    void vscode.commands.executeCommand("setContext", "reviewKit.activeFileReviewed", false);
     this.prevItem.hide();
     this.positionItem.hide();
     this.nextItem.hide();
