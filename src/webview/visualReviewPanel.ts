@@ -7,12 +7,12 @@ import { getReviewDrafts, isDraftExpanded } from "../review/reviewDrafts";
 import { renderMrDescriptionHtml } from "../review/mrDescriptionHtml";
 import { renderMrFlowSvg } from "../graph/mrFlowDiagram";
 import type { MrDiscussionThreadView } from "../gitlab/types";
-import { renderMrDiscussionsSection } from "../review/mrDiscussionsPanel";
 import { setDiffReviewOpen } from "../review/reviewFileNavigation";
 import type { ReviewSession } from "../review/reviewSession";
 import { renderSideBySideDiffHtml } from "../review/sideBySideDiffHtml";
 import { type SymbolRefSummary, renderSymbolRefsHtml } from "../review/changedSymbolRefs";
 import { detectRisks } from "../review/diffPresentation";
+import { pinActiveEditorTab } from "../review/pinReviewTab";
 
 type PanelState = {
   session: ReviewSession;
@@ -66,6 +66,7 @@ export class VisualReviewPanel {
       };
       VisualReviewPanel.current.render();
       VisualReviewPanel.current.panel.reveal(vscode.ViewColumn.One);
+      void pinActiveEditorTab();
       return VisualReviewPanel.current;
     }
     const panel = vscode.window.createWebviewPanel(
@@ -90,6 +91,7 @@ export class VisualReviewPanel {
     );
     VisualReviewPanel.current = instance;
     instance.render();
+    void pinActiveEditorTab();
     return instance;
   }
 
@@ -152,9 +154,16 @@ export class VisualReviewPanel {
   private render(): void {
     const { session, activePath, reviewedPaths, discussions, discussionsLoading, discussionsError } =
       this.state;
+    const drafts = getReviewDrafts();
     const activeChange = session.changeByPath.get(activePath);
     const activeDiff = activeChange?.diff ?? "";
-    const diffHtml = activeChange ? renderSideBySideDiffHtml(activePath, activeDiff) : "";
+    const diffHtml = activeChange
+      ? renderSideBySideDiffHtml(activePath, activeDiff, {
+          filePath: activePath,
+          threads: discussions,
+          drafts,
+        })
+      : "";
     const risks = detectRisks(activeDiff);
     const risksHtml =
       risks.length > 0
@@ -170,14 +179,14 @@ export class VisualReviewPanel {
 
     const progress = reviewedPaths.size;
     const total = session.cards.length;
-    const drafts = getReviewDrafts();
     const draftsHtml = renderDraftsSection(drafts);
     const overviewHtml = renderMrOverviewCollapsed(session, activePath);
-    const discussionsHtml = renderMrDiscussionsSection(
-      discussions,
-      discussionsLoading,
-      discussionsError,
-    );
+    const discussionsStatusHtml =
+      discussionsLoading
+        ? `<p class="diff-comment-hint loading">Carregando comentários do GitLab…</p>`
+        : discussionsError
+          ? `<p class="diff-comment-hint error">${escapeHtml(discussionsError)}</p>`
+          : `<p class="diff-comment-hint">Duplo clique na linha para comentar · clique no indicador ou na linha com thread para expandir</p>`;
 
     this.panel.webview.html = `<!DOCTYPE html>
 <html lang="pt-BR">
@@ -234,7 +243,7 @@ main { flex: 1; display: grid; grid-template-columns: 300px 1fr; min-height: 0; 
 .layer { display: inline-block; font-size: 10px; padding: 2px 6px; border-radius: 999px; margin-right: 6px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
 .name { font-size: 12px; font-weight: 600; word-break: break-all; }
 .meta { font-size: 11px; opacity: 0.8; margin-top: 4px; }
-.detail { display: flex; flex-direction: column; min-height: 0; overflow: auto; }
+.detail { display: flex; flex-direction: column; min-height: 0; overflow: hidden; }
 .detail-head { padding: 10px 12px; border-bottom: 1px solid var(--vscode-panel-border); }
 .path { font-family: var(--vscode-editor-font-family); font-size: 12px; word-break: break-all; }
 .risks { margin-top: 8px; display: flex; flex-wrap: wrap; gap: 6px; }
@@ -255,7 +264,7 @@ main { flex: 1; display: grid; grid-template-columns: 300px 1fr; min-height: 0; 
 .removed-line:hover { outline: 1px solid var(--vscode-focusBorder); }
 .more { font-size: 11px; opacity: .7; margin-top: 4px; }
 .editor-banner { margin: 12px; padding: 10px 12px; border-radius: 8px; border: 1px solid var(--vscode-focusBorder); background: var(--vscode-editor-inactiveSelectionBackground); font-size: 12px; }
-.drafts { margin: 12px; padding: 10px; border: 1px solid var(--vscode-panel-border); border-radius: 8px; background: var(--vscode-sideBar-background); }
+.drafts { flex: 0 0 auto; margin: 0 12px 12px; padding: 10px; max-height: min(180px, 22vh); overflow: auto; border: 1px solid var(--vscode-panel-border); border-radius: 8px; background: var(--vscode-sideBar-background); }
 .drafts h2 { font-size: 12px; margin: 0 0 8px; }
 .draft-item { font-size: 11px; padding: 8px 0; border-bottom: 1px solid var(--vscode-panel-border); }
 .draft-item:last-child { border-bottom: 0; }
@@ -271,26 +280,65 @@ main { flex: 1; display: grid; grid-template-columns: 300px 1fr; min-height: 0; 
 .mr-overview { padding: 8px 12px; border-bottom: 1px solid var(--vscode-panel-border); }
 .mr-overview details { margin-bottom: 8px; }
 .mr-overview summary { cursor: pointer; font-size: 12px; font-weight: 600; padding: 4px 0; }
-.diff-panel { padding: 0 12px 16px; flex: 1; min-height: 0; display: flex; flex-direction: column; }
-.diff-panel-head { padding: 10px 0 8px; border-bottom: 1px solid var(--vscode-panel-border); margin-bottom: 8px; }
+.diff-panel { padding: 0 12px 12px; flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; overflow: hidden; }
+.diff-panel-head { flex: 0 0 auto; padding: 10px 0 8px; border-bottom: 1px solid var(--vscode-panel-border); margin-bottom: 8px; }
 .diff-empty, .refs-loading, .refs-empty { font-size: 12px; opacity: 0.85; }
-.diff-split-head { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; font-size: 11px; font-weight: 600; opacity: 0.85; margin-bottom: 4px; }
+.diff-comment-hint { font-size: 11px; opacity: 0.85; margin: 0 0 8px; }
+.diff-comment-hint.error { color: var(--vscode-inputValidation-errorForeground); }
+.diff-split-head { display: grid; grid-template-columns: 24px 1fr 1fr; gap: 0; font-size: 11px; font-weight: 600; opacity: 0.85; margin-bottom: 4px; padding: 0 0 0 4px; }
+.diff-head-marker { width: 24px; }
 .diff-split { font-family: var(--vscode-editor-font-family); font-size: 11px; line-height: 1.45; overflow: auto; flex: 1; border: 1px solid var(--vscode-panel-border); border-radius: 8px; background: var(--vscode-editor-background); }
-.diff-hunk { grid-column: 1 / -1; padding: 4px 8px; opacity: 0.75; background: var(--vscode-editor-inactiveSelectionBackground); font-size: 10px; }
-.diff-row { display: grid; grid-template-columns: 1fr 1fr; }
+.diff-hunk { padding: 4px 8px; opacity: 0.75; background: var(--vscode-editor-inactiveSelectionBackground); font-size: 10px; }
+.diff-line-block { border-bottom: 1px solid transparent; }
+.diff-line-block.thread-open { background: var(--vscode-editor-inactiveSelectionBackground); }
+.diff-row { display: grid; grid-template-columns: 24px 1fr 1fr; align-items: stretch; }
+.diff-row.has-comments .diff-marker { border-left: 3px solid var(--vscode-textLink-foreground); }
+.diff-row.resolved-only .diff-marker { border-left-color: var(--vscode-descriptionForeground); }
+.diff-marker { display: flex; align-items: center; justify-content: center; padding: 0 2px; }
+.thread-pin { width: 14px; height: 14px; padding: 0; border: 2px solid var(--vscode-textLink-foreground); border-radius: 50%; background: transparent; cursor: pointer; }
+.thread-pin.empty { border: 0; cursor: default; }
+.diff-row.has-open-threads .thread-pin { background: var(--vscode-textLink-foreground); }
+.diff-row.resolved-only .thread-pin { border-color: var(--vscode-descriptionForeground); background: var(--vscode-descriptionForeground); opacity: 0.55; }
+.diff-row.has-resolved-threads:not(.resolved-only) .thread-pin { box-shadow: inset 0 0 0 3px var(--vscode-editor-background); background: linear-gradient(135deg, var(--vscode-textLink-foreground) 50%, var(--vscode-descriptionForeground) 50%); }
+.inline-discussion.is-resolved { margin-bottom: 8px; border: 1px solid var(--vscode-panel-border); border-radius: 8px; background: var(--vscode-editor-background); }
+.inline-discussion.is-resolved:last-child { margin-bottom: 0; }
+.inline-discussion-summary { list-style: none; cursor: pointer; padding: 8px 10px; font-size: 11px; display: flex; flex-wrap: wrap; gap: 6px; align-items: baseline; }
+.inline-discussion.is-resolved > summary { list-style: none; }
+.inline-discussion.is-resolved > summary::-webkit-details-marker { display: none; }
+.inline-resolved-badge { font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 999px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); opacity: 0.9; }
+.inline-discussion-preview { opacity: 0.88; flex: 1; min-width: 0; }
+.inline-discussion-body { padding: 0 10px 10px; border-top: 1px solid var(--vscode-panel-border); }
 .diff-cell { display: flex; gap: 4px; padding: 0 6px; border-bottom: 1px solid var(--vscode-panel-border); min-height: 1.45em; }
+.diff-cell.commentable { cursor: text; }
+.diff-cell.commentable:hover { box-shadow: inset 0 0 0 1px var(--vscode-focusBorder); }
 .diff-cell code { flex: 1; white-space: pre-wrap; word-break: break-word; }
 .diff-cell.left.del, .diff-cell.right.add, .diff-cell.right.mod { background: var(--vscode-diffEditor-insertedLineBackground, rgba(46,160,67,.12)); }
 .diff-cell.left.del { background: var(--vscode-diffEditor-removedLineBackground, rgba(248,81,73,.12)); }
 .diff-cell.left.del.only { background: var(--vscode-diffEditor-removedLineBackground, rgba(248,81,73,.12)); }
-.gutter { flex: 0 0 36px; text-align: right; padding: 0 4px; border: 0; background: transparent; color: var(--vscode-descriptionForeground); cursor: pointer; font-family: inherit; font-size: 10px; }
-.gutter:hover { color: var(--vscode-textLink-foreground); text-decoration: underline; }
+.gutter { flex: 0 0 36px; text-align: right; padding: 0 4px; color: var(--vscode-descriptionForeground); font-family: inherit; font-size: 10px; user-select: none; }
 .gutter.empty { flex: 0 0 36px; }
+.diff-inline-thread { padding: 8px 10px 10px 34px; border-bottom: 1px solid var(--vscode-panel-border); background: var(--vscode-sideBar-background); }
+.diff-inline-thread.collapsed { display: none; }
+.inline-thread-anchor { margin-bottom: 10px; }
+.inline-thread-anchor:last-child { margin-bottom: 0; }
+.inline-thread-anchor-label { font-size: 10px; font-weight: 600; opacity: 0.8; margin-bottom: 6px; }
+.inline-thread-note { margin-bottom: 8px; padding: 8px 10px; border-radius: 8px; background: var(--vscode-editor-background); border: 1px solid var(--vscode-panel-border); }
+.inline-thread-note.mine { border-left: 3px solid var(--vscode-gitDecoration-addedResourceForeground); }
+.inline-thread-note.theirs { border-left: 3px solid var(--vscode-textLink-foreground); }
+.inline-thread-note.draft { border-left: 3px solid var(--vscode-inputValidation-warningBorder); }
+.inline-thread-meta { font-size: 10px; opacity: 0.85; margin-bottom: 4px; }
+.inline-thread-body { font-size: 12px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+.inline-composer { margin: 0; padding: 8px 10px 10px 34px; border-bottom: 1px solid var(--vscode-panel-border); background: var(--vscode-sideBar-background); }
+.inline-composer textarea, .inline-reply-input { width: 100%; font-family: inherit; font-size: 12px; padding: 8px; border-radius: 6px; border: 1px solid var(--vscode-input-border); background: var(--vscode-input-background); color: var(--vscode-input-foreground); resize: vertical; }
+.inline-composer-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.inline-composer-actions button { font-family: inherit; font-size: 11px; padding: 5px 10px; border-radius: 6px; border: 1px solid var(--vscode-panel-border); cursor: pointer; background: var(--vscode-button-secondaryBackground); color: var(--vscode-button-secondaryForeground); }
+.inline-composer-actions button.primary { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: transparent; }
+.inline-reply-form { margin-top: 8px; }
 .tok-kw { color: var(--vscode-symbolIcon-keywordForeground, #c586c0); }
 .tok-str { color: var(--vscode-symbolIcon-stringForeground, #ce9178); }
 .tok-com { opacity: 0.7; }
 .tok-type { color: var(--vscode-symbolIcon-classForeground, #4ec9b0); }
-.symbol-refs { margin: 12px 0; padding: 10px; border: 1px solid var(--vscode-panel-border); border-radius: 8px; background: var(--vscode-sideBar-background); }
+.symbol-refs { flex: 0 0 auto; margin: 0 0 8px; padding: 10px; max-height: min(160px, 20vh); overflow: auto; border: 1px solid var(--vscode-panel-border); border-radius: 8px; background: var(--vscode-sideBar-background); }
 .symbol-refs h3 { font-size: 12px; margin: 0 0 8px; }
 .ref-card { margin-bottom: 10px; padding-bottom: 8px; border-bottom: 1px solid var(--vscode-panel-border); }
 .ref-card:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 0; }
@@ -353,7 +401,8 @@ main { flex: 1; display: grid; grid-template-columns: 300px 1fr; min-height: 0; 
 .flow-hint { font-size: 11px; opacity: 0.75; margin: 6px 0 0; }
 .file-section { padding: 0 12px 12px; border-bottom: 1px solid var(--vscode-panel-border); }
 .file-section .path { padding-top: 10px; }
-.discussions { margin: 12px; padding: 10px; border: 1px solid var(--vscode-panel-border); border-radius: 8px; background: var(--vscode-sideBar-background); }
+.discussions { flex: 0 0 auto; margin: 0 0 8px; padding: 8px 10px; max-height: min(220px, 28vh); overflow: auto; border: 1px solid var(--vscode-panel-border); border-radius: 8px; background: var(--vscode-sideBar-background); }
+.discussions .thread-card:last-child { margin-bottom: 0; }
 .discussions-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
 .discussions-head h2 { font-size: 12px; margin: 0; flex: 1; }
 .discussions-refresh { font-size: 11px; padding: 4px 8px; border-radius: 4px; border: 1px solid var(--vscode-panel-border); cursor: pointer; }
@@ -400,11 +449,11 @@ main { flex: 1; display: grid; grid-template-columns: 300px 1fr; min-height: 0; 
       <div class="diff-panel-head">
         <div class="path">${escapeHtml(activePath)}</div>
         ${risksHtml}
+        ${discussionsStatusHtml}
       </div>
       ${refsHtml}
       ${diffHtml}
     </div>
-    ${discussionsHtml}
     ${draftsHtml}
   </section>
 </main>
@@ -421,12 +470,107 @@ document.querySelectorAll('[data-path]').forEach(el => {
     if (path) vscode.postMessage({ type: 'openFile', path });
   });
 });
-document.querySelectorAll('.diff-cell .gutter[data-line]').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const line = Number(btn.getAttribute('data-line'));
-    const side = btn.getAttribute('data-side') === 'old' ? 'old' : 'new';
-    if (line) vscode.postMessage({ type: 'commentLineAt', path: ${JSON.stringify(activePath)}, line, side });
+const activeFilePath = ${JSON.stringify(activePath)};
+const diffSplit = document.querySelector('.diff-split');
+let suppressLineClick = false;
+function lineBlockHasThread(block) {
+  return !!block?.querySelector('.diff-inline-thread .inline-thread-note, .diff-inline-thread .inline-discussion, .diff-inline-thread details.inline-discussion');
+}
+function toggleThreadBlock(block, open) {
+  const panel = block?.querySelector('.diff-inline-thread');
+  if (!panel) return;
+  const shouldOpen = open ?? panel.classList.contains('collapsed');
+  panel.classList.toggle('collapsed', !shouldOpen);
+  block?.classList.toggle('thread-open', shouldOpen);
+}
+function closeInlineComposer() {
+  document.querySelectorAll('.inline-composer').forEach((el) => el.remove());
+}
+function mountInlineComposer(block, side, line) {
+  closeInlineComposer();
+  const wrap = document.createElement('div');
+  wrap.className = 'inline-composer';
+  wrap.dataset.side = side;
+  wrap.dataset.line = String(line);
+  wrap.innerHTML = '<textarea class="inline-comment-input" rows="3" placeholder="Escreva um comentário…"></textarea>' +
+    '<div class="inline-composer-actions">' +
+    '<button type="button" class="primary" data-action="send">Comentar</button>' +
+    '<button type="button" data-action="queue">Salvar na fila</button>' +
+    '<button type="button" data-action="cancel">Cancelar</button></div>';
+  const row = block.querySelector('.diff-row');
+  const thread = block.querySelector('.diff-inline-thread');
+  if (thread) {
+    thread.classList.remove('collapsed');
+    block.classList.add('thread-open');
+    row?.insertAdjacentElement('afterend', wrap);
+  } else {
+    row?.insertAdjacentElement('afterend', wrap);
+  }
+  const ta = wrap.querySelector('textarea');
+  ta?.focus();
+  wrap.querySelector('[data-action="cancel"]')?.addEventListener('click', () => wrap.remove());
+  wrap.querySelector('[data-action="send"]')?.addEventListener('click', () => {
+    const body = ta?.value?.trim();
+    if (!body) return;
+    vscode.postMessage({ type: 'submitInlineComment', path: activeFilePath, line: Number(line), side, body, action: 'send' });
   });
+  wrap.querySelector('[data-action="queue"]')?.addEventListener('click', () => {
+    const body = ta?.value?.trim();
+    if (!body) return;
+    vscode.postMessage({ type: 'submitInlineComment', path: activeFilePath, line: Number(line), side, body, action: 'queue' });
+  });
+  ta?.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
+      e.preventDefault();
+      wrap.querySelector('[data-action="send"]')?.click();
+    }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      wrap.remove();
+    }
+  });
+}
+diffSplit?.addEventListener('click', (e) => {
+  if (suppressLineClick) return;
+  const target = e.target;
+  if (!(target instanceof Element)) return;
+  if (target.closest('.inline-composer, .inline-reply-form, details.inline-discussion, textarea, button')) return;
+  const pin = target.closest('.thread-pin:not(.empty)');
+  if (pin) {
+    e.preventDefault();
+    const block = pin.closest('.diff-line-block');
+    if (block) toggleThreadBlock(block);
+    return;
+  }
+  const cell = target.closest('.diff-cell.commentable');
+  if (!cell) return;
+  const block = cell.closest('.diff-line-block');
+  if (!block || !lineBlockHasThread(block)) return;
+  toggleThreadBlock(block);
+});
+diffSplit?.addEventListener('dblclick', (e) => {
+  const target = e.target;
+  if (!(target instanceof Element)) return;
+  const cell = target.closest('.diff-cell.commentable');
+  if (!cell) return;
+  e.preventDefault();
+  suppressLineClick = true;
+  setTimeout(() => { suppressLineClick = false; }, 320);
+  const side = cell.getAttribute('data-comment-side') === 'old' ? 'old' : 'new';
+  const line = Number(cell.getAttribute('data-comment-line'));
+  if (!line) return;
+  const block = cell.closest('.diff-line-block');
+  if (block) mountInlineComposer(block, side, line);
+});
+diffSplit?.addEventListener('submit', (e) => {
+  const form = e.target;
+  if (!(form instanceof HTMLFormElement) || !form.classList.contains('inline-reply-form')) return;
+  e.preventDefault();
+  const discussionId = form.getAttribute('data-discussion-id');
+  const input = form.querySelector('.inline-reply-input');
+  const body = input instanceof HTMLTextAreaElement ? input.value.trim() : '';
+  if (!discussionId || !body) return;
+  vscode.postMessage({ type: 'replyInlineComment', path: activeFilePath, discussionId, body });
 });
 document.querySelectorAll('[data-draft-id]').forEach(el => {
   el.querySelector('.draft-goto')?.addEventListener('click', (e) => {
@@ -448,7 +592,6 @@ document.querySelectorAll('.flow-node').forEach(node => {
     if (path) post('select', path);
   });
 });
-document.querySelector('.discussions-refresh')?.addEventListener('click', () => post('refreshDiscussions'));
 document.querySelector('.mr-description-body')?.addEventListener('click', (e) => {
   const target = e.target;
   if (!(target instanceof Element)) return;
@@ -457,19 +600,6 @@ document.querySelector('.mr-description-body')?.addEventListener('click', (e) =>
   e.preventDefault();
   const href = anchor.getAttribute('href');
   if (href && href !== '#') vscode.postMessage({ type: 'openExternalLink', href });
-});
-document.querySelectorAll('.thread-goto').forEach(btn => {
-  btn.addEventListener('click', () => {
-    const path = btn.getAttribute('data-path');
-    if (!path) return;
-    const line = btn.getAttribute('data-line');
-    const side = btn.getAttribute('data-side') || 'new';
-    if (line) {
-      vscode.postMessage({ type: 'goToThread', path, line: Number(line), side });
-    } else {
-      post('select', path);
-    }
-  });
 });
 </script>
 </body>
@@ -491,6 +621,8 @@ export type WebviewRequest =
   | { type: "openFile"; path: string }
   | { type: "openEditorDiff"; path?: string }
   | { type: "commentLineAt"; path: string; line: number; side: "new" | "old" }
+  | { type: "submitInlineComment"; path: string; line: number; side: "new" | "old"; body: string; action: "send" | "queue" }
+  | { type: "replyInlineComment"; path: string; discussionId: string; body: string }
   | { type: "prev" }
   | { type: "next" }
   | { type: "toggleReviewed" }

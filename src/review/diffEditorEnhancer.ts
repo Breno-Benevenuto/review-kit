@@ -1,6 +1,7 @@
 import * as path from "node:path";
 import * as vscode from "vscode";
 import { closeOtherMrDiffTabs, focusModifiedSide } from "./diffFocus";
+import { pinDiffTabByTitle } from "./pinReviewTab";
 import { languageIdForPath } from "./languageId";
 
 export async function openSideBySideColoredDiff(options: {
@@ -22,6 +23,7 @@ export async function openSideBySideColoredDiff(options: {
   await applyLanguageWithRetry(options.left, options.right, languageId);
 
   await focusModifiedSide(options.right);
+  void pinDiffTabByTitle(options.title);
   options.onRightOpened?.(options.right);
 
   const inline = vscode.workspace.getConfiguration("reviewKit").get<boolean>("diffInline") ?? false;

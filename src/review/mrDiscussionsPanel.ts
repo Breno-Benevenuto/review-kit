@@ -1,13 +1,26 @@
 import type { MrDiscussionThreadView } from "../gitlab/types";
 import { escapeHtml } from "./diffPresentation";
 
+export function discussionMatchesFilePath(
+  anchorPath: string | undefined,
+  activePath: string,
+): boolean {
+  if (!anchorPath || !activePath) {
+    return false;
+  }
+  const anchor = anchorPath.replace(/\\/g, "/");
+  const active = activePath.replace(/\\/g, "/");
+  return anchor === active || anchor.endsWith(`/${active}`) || active.endsWith(`/${anchor}`);
+}
+
 export function renderMrDiscussionsSection(
   threads: MrDiscussionThreadView[],
   loading: boolean,
   error?: string,
+  activePath?: string,
 ): string {
   const head = `<div class="discussions-head">
-    <h2>Respostas aos seus comentários</h2>
+    <h2>Comentários neste arquivo</h2>
     <button type="button" class="secondary discussions-refresh" data-action="refreshDiscussions">Atualizar</button>
   </div>`;
 
@@ -19,15 +32,21 @@ export function renderMrDiscussionsSection(
   }
 
   const mine = threads.filter((t) => t.involvesCurrentUser);
-  if (mine.length === 0) {
-    return `<section class="discussions">${head}<p class="discussions-status">Você ainda não tem comentários neste MR (ou só notas de sistema).</p></section>`;
+  const forFile = activePath
+    ? mine.filter((t) => discussionMatchesFilePath(t.anchorPath, activePath))
+    : mine;
+  if (forFile.length === 0) {
+    const emptyMsg = activePath
+      ? "Nenhum comentário seu neste arquivo."
+      : "Você ainda não tem comentários neste MR (ou só notas de sistema).";
+    return `<section class="discussions">${head}<p class="discussions-status">${emptyMsg}</p></section>`;
   }
 
-  const items = mine
+  const items = forFile
     .map((thread) => {
       const loc =
-        thread.anchorPath && thread.anchorLine !== undefined
-          ? `${thread.anchorPath} · L${thread.anchorLine}${thread.anchorSide ? ` (${thread.anchorSide})` : ""}`
+        thread.anchorLine !== undefined
+          ? `L${thread.anchorLine}${thread.anchorSide ? ` (${thread.anchorSide})` : ""}`
           : thread.anchorPath ?? "Nota no MR";
       const goto =
         thread.anchorPath && thread.anchorLine !== undefined && thread.anchorSide
@@ -35,9 +54,11 @@ export function renderMrDiscussionsSection(
           : thread.anchorPath
             ? `<button type="button" class="thread-goto" data-path="${escapeHtml(thread.anchorPath)}">Abrir arquivo</button>`
             : "";
-      const badge = thread.hasReplyFromOthers
-        ? `<span class="thread-badge reply">Nova resposta</span>`
-        : `<span class="thread-badge">Sem resposta</span>`;
+      const badge = thread.resolved
+        ? `<span class="thread-badge resolved">Resolvido</span>`
+        : thread.hasReplyFromOthers
+          ? `<span class="thread-badge reply">Nova resposta</span>`
+          : `<span class="thread-badge">Sem resposta</span>`;
       const notesHtml = thread.notes
         .map((n) => {
           const who = n.isCurrentUser ? "Você" : escapeHtml(n.authorName);

@@ -236,6 +236,22 @@ export class GitLabClient {
     });
   }
 
+  async createMrDiscussionNote(
+    projectId: number,
+    mrIid: number,
+    discussionId: string,
+    body: string,
+  ): Promise<void> {
+    await this.request(
+      `/projects/${projectId}/merge_requests/${mrIid}/discussions/${encodeURIComponent(discussionId)}/notes`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ body }),
+      },
+    );
+  }
+
   async createMrDiscussion(
     projectId: number,
     mrIid: number,

@@ -86,7 +86,7 @@ export async function gitlabRequest(
       return await nodeGitLabRequest(url, init, insecureTls);
     } catch (e) {
       lastError = e;
-      const code = e instanceof Error && "code" in e ? String((e as NodeJS.ErrnoException).code) : "";
+      const code = networkErrorCode(e);
       if (!RETRYABLE.has(code) || attempt === attempts - 1) {
         break;
       }
@@ -102,21 +102,64 @@ export async function gitlabRequest(
 }
 
 function shouldTryCurlFallback(error: unknown): boolean {
-  if (!(error instanceof Error)) {
-    return false;
-  }
-  const code = "code" in error ? String((error as NodeJS.ErrnoException).code) : "";
-  return RETRYABLE.has(code);
+  return RETRYABLE.has(networkErrorCode(error));
 }
 
-function nodeGitLabRequest(
+function networkErrorCode(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return "";
+  }
+  if ("code" in error && (error as NodeJS.ErrnoException).code) {
+    return String((error as NodeJS.ErrnoException).code);
+  }
+  const cause = error.cause;
+  if (cause instanceof Error && "code" in cause) {
+    return String((cause as NodeJS.ErrnoException).code);
+  }
+  return "";
+}
+
+async function nodeGitLabRequest(
   url: string,
   init: { method?: string; headers?: Record<string, string>; body?: string },
   insecureTls: boolean,
 ): Promise<GitLabHttpResponse> {
+  if (insecureTls) {
+    return nodeHttpsGitLabRequest(url, init);
+  }
+  return fetchGitLabRequest(url, init);
+}
+
+async function fetchGitLabRequest(
+  url: string,
+  init: { method?: string; headers?: Record<string, string>; body?: string },
+): Promise<GitLabHttpResponse> {
+  const requestUrl = new URL(url);
+  const res = await fetch(requestUrl, {
+    method: init.method ?? "GET",
+    headers: {
+      Connection: "close",
+      "User-Agent": "review-kit",
+      ...(init.headers ?? {}),
+    },
+    body: init.body,
+    redirect: "manual",
+  });
+  const body = await res.text();
+  const headers: http.IncomingHttpHeaders = {};
+  res.headers.forEach((value, key) => {
+    headers[key] = value;
+  });
+  return { status: res.status, headers, body };
+}
+
+function nodeHttpsGitLabRequest(
+  url: string,
+  init: { method?: string; headers?: Record<string, string>; body?: string },
+): Promise<GitLabHttpResponse> {
   return new Promise((resolve, reject) => {
-    const parsed = new URL(url);
-    const isHttps = parsed.protocol === "https:";
+    const requestUrl = new URL(url);
+    const isHttps = requestUrl.protocol === "https:";
     const lib = isHttps ? https : http;
     const headers: Record<string, string> = {
       Connection: "close",
@@ -124,16 +167,13 @@ function nodeGitLabRequest(
       ...(init.headers ?? {}),
     };
     const req = lib.request(
+      requestUrl,
       {
-        hostname: parsed.hostname,
-        port: parsed.port || (isHttps ? 443 : 80),
-        path: `${parsed.pathname}${parsed.search}`,
         method: init.method ?? "GET",
         headers,
-        rejectUnauthorized: isHttps ? !insecureTls : undefined,
-        servername: parsed.hostname,
-        family: 4,
+        rejectUnauthorized: false,
         timeout: 30_000,
+        family: 4,
       },
       (res) => {
         const chunks: Buffer[] = [];
@@ -163,6 +203,7 @@ async function curlGitLabRequest(
   init: { method?: string; headers?: Record<string, string>; body?: string },
   insecureTls: boolean,
 ): Promise<GitLabHttpResponse> {
+  new URL(url);
   const statusMarker = "\n\u001eSTATUS\u001e";
   const args = [
     "-sS",

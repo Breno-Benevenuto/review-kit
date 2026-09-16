@@ -23,12 +23,16 @@ export function mapMrDiscussions(
       notes,
       involvesCurrentUser,
       hasReplyFromOthers,
+      resolved: discussion.resolved === true,
       anchorPath: anchor?.filePath,
       anchorLine: anchor?.line,
       anchorSide: anchor?.side,
     });
   }
   return threads.sort((a, b) => {
+    if (a.resolved !== b.resolved) {
+      return a.resolved ? 1 : -1;
+    }
     if (a.hasReplyFromOthers !== b.hasReplyFromOthers) {
       return a.hasReplyFromOthers ? -1 : 1;
     }

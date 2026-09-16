@@ -119,14 +119,9 @@ export class MrTreeProvider implements vscode.TreeDataProvider<vscode.TreeItem> 
         const item = new vscode.TreeItem(mr.title, vscode.TreeItemCollapsibleState.Collapsed);
         item.id = key;
         item.description = `${mr.references?.full ?? `!${mr.iid}`}${mr.draft ? " · draft" : ""}`;
-        item.tooltip = mr.web_url;
         item.contextValue = "mr";
         item.iconPath = new vscode.ThemeIcon("git-merge");
-        item.command = {
-          command: "reviewKit.openVisualReview",
-          title: "Abrir revisão visual",
-          arguments: [key],
-        };
+        item.tooltip = `${mr.web_url}\nDuplo clique para abrir a revisão visual`;
         return item;
       });
     }
@@ -217,4 +212,6 @@ export async function openFileDiff(
     preview: false,
     viewColumn: vscode.ViewColumn.Two,
   });
+  const { pinDiffTabByTitle } = await import("../review/pinReviewTab");
+  void pinDiffTabByTitle(title);
 }

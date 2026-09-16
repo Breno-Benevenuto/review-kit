@@ -24,6 +24,64 @@ import {
 } from "./reviewDrafts";
 import { requestMrDiscussionsRefresh } from "./mrDiscussionsRefresh";
 
+export async function queueInlineLineComment(
+  filePath: string,
+  line: number,
+  side: LineCommentSide,
+  body: string,
+): Promise<void> {
+  const text = body.trim();
+  if (!text) {
+    return;
+  }
+  addReviewDraft(filePath, line, side, text);
+  VisualReviewPanel.current?.refresh();
+  void vscode.window.setStatusBarMessage(`Fila: ${getReviewDrafts().length} comentário(s)`, 2500);
+}
+
+export async function submitInlineLineComment(
+  client: GitLabClient,
+  session: ReviewSession,
+  filePath: string,
+  line: number,
+  side: LineCommentSide,
+  body: string,
+  action: "send" | "queue",
+): Promise<void> {
+  const text = body.trim();
+  if (!text) {
+    return;
+  }
+  if (action === "queue") {
+    await queueInlineLineComment(filePath, line, side, text);
+    return;
+  }
+  try {
+    await submitLineThreadDirect(client, session, filePath, line, text, side);
+  } catch (e) {
+    void vscode.window.showErrorMessage(`Review Kit: ${commentErrorMessage(e)}`);
+  }
+}
+
+export async function replyToMrDiscussion(
+  client: GitLabClient,
+  session: ReviewSession,
+  discussionId: string,
+  body: string,
+): Promise<void> {
+  const text = body.trim();
+  if (!text) {
+    return;
+  }
+  const target = targetFromSession(session);
+  try {
+    await client.createMrDiscussionNote(target.projectId, target.iid, discussionId, text);
+    requestMrDiscussionsRefresh(session);
+  } catch (e) {
+    void vscode.window.showErrorMessage(`Review Kit: ${commentErrorMessage(e)}`);
+  }
+}
+
 export async function submitLineThreadDirect(
   client: GitLabClient,
   session: ReviewSession,
@@ -206,6 +264,12 @@ export async function commentOnLineAt(
 export async function commentOnActiveEditorLine(
   client: GitLabClient,
   session: ReviewSession | undefined,
+  openInline?: (
+    session: ReviewSession,
+    editor: vscode.TextEditor,
+    line: number,
+    side: LineCommentSide,
+  ) => void,
 ): Promise<void> {
   if (!session) {
     void vscode.window.showWarningMessage("Abra a revisão visual de um MR primeiro.");
@@ -223,6 +287,10 @@ export async function commentOnActiveEditorLine(
     return;
   }
   const side = commentSideForDocument(editor.document.uri);
+  if (openInline) {
+    openInline(session, editor, line, side);
+    return;
+  }
   await promptAndPostLineThread(client, session, filePath, line, side);
 }
 

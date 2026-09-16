@@ -89,6 +89,8 @@ export type GitLabDiscussionNote = {
 export type GitLabDiscussion = {
   id: string;
   notes: GitLabDiscussionNote[];
+  resolved?: boolean;
+  resolvable?: boolean;
 };
 
 export type MrDiscussionNoteView = {
@@ -108,6 +110,7 @@ export type MrDiscussionThreadView = {
   notes: MrDiscussionNoteView[];
   involvesCurrentUser: boolean;
   hasReplyFromOthers: boolean;
+  resolved: boolean;
   anchorPath?: string;
   anchorLine?: number;
   anchorSide?: "new" | "old";

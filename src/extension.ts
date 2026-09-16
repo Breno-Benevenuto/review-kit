@@ -41,8 +41,10 @@ import {
   openLineCommentComposer,
   promptAndPostLineThread,
   promptAndPostMrComment,
+  replyToMrDiscussion,
   resolveCommentTarget,
   submitAllQueuedReviewComments,
+  submitInlineLineComment,
 } from "./review/commentCommands";
 import { onReviewDraftsChanged } from "./review/reviewDrafts";
 import { targetFromSession, commentSideForDocument, matchMrFilePath } from "./review/mrComments";
@@ -60,6 +62,14 @@ import {
   registerDraftCommentThreads,
   type DraftCommentThreadController,
 } from "./review/draftCommentThreads";
+import {
+  registerMrDiscussionCommentThreads,
+  type MrDiscussionCommentThreadsController,
+} from "./review/mrDiscussionCommentThreads";
+import {
+  clearMrDiscussionsCache,
+  setMrDiscussionsCache,
+} from "./review/mrDiscussionsCache";
 import { MrReviewStatusBar, resolveActiveReviewFilePath } from "./review/mrReviewStatusBar";
 import { setMrEditorReviewController } from "./review/reviewEditorRef";
 import { getCurrentGitBranch } from "./review/gitBranch";
@@ -83,6 +93,7 @@ let mrEditorReview: MrEditorReviewController | undefined;
 let mrReviewStatusBar: MrReviewStatusBar | undefined;
 let mrInlayHints: MrReviewInlayHintsProvider | undefined;
 let draftCommentThreads: DraftCommentThreadController | undefined;
+let mrDiscussionComments: MrDiscussionCommentThreadsController | undefined;
 
 export async function activate(context: vscode.ExtensionContext): Promise<void> {
   const progress = new ReviewProgressProvider(context);
@@ -90,6 +101,11 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
   setMrEditorReviewController(mrEditorReview);
   mrInlayHints = registerMrReviewInlayHints(context, () => activeSession);
   draftCommentThreads = registerDraftCommentThreads(context, () => activeSession);
+  mrDiscussionComments = registerMrDiscussionCommentThreads(
+    context,
+    () => activeSession,
+    () => client,
+  );
   setMrDiscussionsRefreshHandler((session) => {
     void refreshMrDiscussionsForSession(session);
   });
@@ -116,24 +132,47 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
     treeDataProvider: mrTree,
     canSelectMany: false,
   });
-  let lastTreeFileClick: { id: string; at: number } | undefined;
+  let lastTreeClick: { id: string; kind: "mr" | "file"; at: number } | undefined;
   mrTreeView.onDidChangeSelection((event) => {
     const item = event.selection[0];
-    if (!item || item.contextValue !== "changedFile") {
+    if (!item?.id) {
+      return;
+    }
+    const now = Date.now();
+    if (item.contextValue === "mr") {
+      const mr = mrTree.getMr(item.id);
+      if (!mr) {
+        return;
+      }
+      if (
+        lastTreeClick?.kind === "mr" &&
+        lastTreeClick.id === item.id &&
+        now - lastTreeClick.at <= FILE_DOUBLE_CLICK_MS
+      ) {
+        lastTreeClick = undefined;
+        void startVisualReview(mr, progress, mrTree);
+        return;
+      }
+      lastTreeClick = { id: item.id, kind: "mr", at: now };
+      return;
+    }
+    if (item.contextValue !== "changedFile") {
       return;
     }
     const ctx = mrTree.getFileContext(item);
     if (!ctx) {
       return;
     }
-    const id = item.id ?? "";
-    const now = Date.now();
-    if (lastTreeFileClick?.id === id && now - lastTreeFileClick.at <= FILE_DOUBLE_CLICK_MS) {
-      lastTreeFileClick = undefined;
+    if (
+      lastTreeClick?.kind === "file" &&
+      lastTreeClick.id === item.id &&
+      now - lastTreeClick.at <= FILE_DOUBLE_CLICK_MS
+    ) {
+      lastTreeClick = undefined;
       void openMrFileDiff(ctx, progress, mrTree);
       return;
     }
-    lastTreeFileClick = { id, at: now };
+    lastTreeClick = { id: item.id, kind: "file", at: now };
     void selectFileInReview(ctx, progress, mrTree);
   });
 
@@ -185,7 +224,9 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         void vscode.window.showWarningMessage("Configure o token GitLab primeiro.");
         return;
       }
-      void commentOnActiveEditorLine(gitlab, activeSession);
+      void commentOnActiveEditorLine(gitlab, activeSession, (s, editor, line, side) => {
+        mrDiscussionComments?.openAtLine(s, editor, line, side);
+      });
     }),
     vscode.commands.registerCommand(
       "reviewKit.commentOnLineAt",
@@ -199,6 +240,10 @@ export async function activate(context: vscode.ExtensionContext): Promise<void> 
         const lineNum = line ?? (editor ? editor.selection.active.line + 1 : undefined);
         if (!lineNum) {
           void vscode.window.showWarningMessage("Posicione o cursor na linha do arquivo.");
+          return;
+        }
+        if (activeSession && editor && mrDiscussionComments && matchMrFilePath(activeSession, editor.document.uri)) {
+          mrDiscussionComments.openAtLine(activeSession, editor, lineNum, side);
           return;
         }
         void commentOnLineAt(gitlab, activeSession, lineNum, side, filePath);
@@ -318,26 +363,33 @@ function syncDraftCommentUi(): void {
 
 async function refreshMrDiscussionsForSession(session: ReviewSession): Promise<void> {
   const panel = VisualReviewPanel.current;
-  if (!panel || !client) {
+  if (!client) {
     return;
   }
-  panel.setDiscussionsLoading(true);
+  panel?.setDiscussionsLoading(true);
   try {
     const projectId = resolveProjectIdForMr(session.mr.project_id);
     const threads = await fetchMrDiscussionThreads(client, projectId, session.mr.iid);
-    panel.setDiscussions(threads);
+    setMrDiscussionsCache(session.mr, threads);
+    panel?.setDiscussions(threads);
+    mrDiscussionComments?.sync(session);
+    VisualReviewPanel.current?.refresh();
   } catch (e) {
     const msg = e instanceof GitLabApiError ? `HTTP ${e.status}: ${e.message}` : String(e);
-    panel.setDiscussions([], msg);
+    setMrDiscussionsCache(session.mr, [], msg);
+    panel?.setDiscussions([], msg);
+    mrDiscussionComments?.sync(session);
   }
 }
 
 export function deactivate(): void {
   client = undefined;
   activeSession = undefined;
+  clearMrDiscussionsCache();
   setMrDiscussionsRefreshHandler(undefined);
   setMrEditorReviewController(undefined);
   mrEditorReview = undefined;
+  mrDiscussionComments = undefined;
 }
 
 async function restoreClient(context: vscode.ExtensionContext, mrTree?: MrTreeProvider): Promise<void> {
@@ -526,6 +578,7 @@ async function startVisualReview(
     mrInlayHints?.refresh();
     cancelReviewDraftSession();
     clearRawFileCache();
+    clearMrDiscussionsCache();
     const highlightPath = startPath ?? session.cards[0]?.path;
     if (!highlightPath) {
       void vscode.window.showInformationMessage("MR sem arquivos para revisar.");
@@ -624,9 +677,28 @@ function handleVisualReviewMessage(
     return;
   }
   if (msg.type === "commentLineAt" && msg.path && msg.line) {
+    const side = msg.side === "old" ? "old" : "new";
+    const editor = vscode.window.activeTextEditor;
+    if (editor && mrDiscussionComments) {
+      mrDiscussionComments.openAtLine(session, editor, msg.line, side);
+      return;
+    }
+    if (client) {
+      void openLineCommentComposer(client, session, msg.path, msg.line, side);
+    }
+    return;
+  }
+  if (msg.type === "submitInlineComment" && msg.path && msg.line && msg.body) {
     if (client) {
       const side = msg.side === "old" ? "old" : "new";
-      void openLineCommentComposer(client, session, msg.path, msg.line, side);
+      const action = msg.action === "queue" ? "queue" : "send";
+      void submitInlineLineComment(client, session, msg.path, msg.line, side, msg.body, action);
+    }
+    return;
+  }
+  if (msg.type === "replyInlineComment" && msg.discussionId && msg.body) {
+    if (client) {
+      void replyToMrDiscussion(client, session, msg.discussionId, msg.body);
     }
     return;
   }
@@ -677,6 +749,10 @@ function handleVisualReviewMessage(
     void (async () => {
       await openReviewFile(session, msg.path);
       await revealMrLine(session, msg.path, msg.line, side);
+      const editor = vscode.window.activeTextEditor;
+      if (editor && mrDiscussionComments) {
+        mrDiscussionComments.openAtLine(session, editor, msg.line, side);
+      }
     })();
     return;
   } else if (msg.type === "openExternalLink" && msg.href) {
@@ -750,8 +826,12 @@ async function openReviewFile(session: ReviewSession, path: string): Promise<voi
   mrInlayHints?.refresh();
   syncDraftCommentUi();
   void refreshSymbolRefsForPath(session, path, headUri);
+  mrDiscussionComments?.sync(session);
   const { label } = reviewFilePosition(session, path);
-  void vscode.window.setStatusBarMessage(`Review Kit: ${label} · diff no painel`, 2500);
+  void vscode.window.setStatusBarMessage(
+    `Review Kit: ${label} · duplo clique na linha para comentar`,
+    2500,
+  );
 }
 
 async function openReviewDiff(session: ReviewSession, path: string): Promise<void> {
@@ -879,6 +959,10 @@ async function commentNowFromActiveEditor(
   }
   const line = editor ? editor.selection.active.line + 1 : 1;
   const side = editor ? commentSideForDocument(editor.document.uri) : "new";
+  if (editor && mrDiscussionComments && matchMrFilePath(session, editor.document.uri)) {
+    mrDiscussionComments.openAtLine(session, editor, line, side);
+    return;
+  }
   try {
     await commentNowOnLine(gitlab, session, filePath, line, side);
   } catch (e) {

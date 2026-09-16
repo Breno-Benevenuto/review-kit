@@ -2,7 +2,7 @@
   "name": "review-kit",
   "displayName": "Review Kit",
   "description": "Guided GitLab merge request code review in Cursor",
-  "version": "0.2.20",
+  "version": "0.2.22",
   "publisher": "review-kit",
   "icon": "media/icon.png",
   "repository": {
@@ -218,6 +218,21 @@
         "command": "reviewKit.diffPrevChange",
         "title": "Review Kit: Alteração anterior no diff",
         "enablement": "reviewKit.mrReviewActive"
+      },
+      {
+        "command": "reviewKit.mrEditorCommentSend",
+        "title": "Comentar",
+        "enablement": "!commentIsEmpty"
+      },
+      {
+        "command": "reviewKit.mrEditorCommentQueue",
+        "title": "Salvar na fila",
+        "enablement": "!commentIsEmpty"
+      },
+      {
+        "command": "reviewKit.mrEditorCommentReply",
+        "title": "Responder",
+        "enablement": "!commentIsEmpty"
       }
     ],
     "keybindings": [
@@ -316,6 +331,37 @@
           "command": "reviewKit.commentMrFromReview",
           "when": "reviewKit.mrReviewActive",
           "group": "navigation@1"
+        }
+      ],
+      "comments/commentThread/context": [
+        {
+          "command": "reviewKit.mrEditorCommentSend",
+          "when": "commentController == reviewKit.mrDiscussions && commentThread == newLine",
+          "group": "inline@1"
+        },
+        {
+          "command": "reviewKit.mrEditorCommentQueue",
+          "when": "commentController == reviewKit.mrDiscussions && commentThread == newLine",
+          "group": "inline@2"
+        },
+        {
+          "command": "reviewKit.mrEditorCommentReply",
+          "when": "commentController == reviewKit.mrDiscussions && commentThread == gitlab",
+          "group": "inline@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "reviewKit.mrEditorCommentSend",
+          "when": "false"
+        },
+        {
+          "command": "reviewKit.mrEditorCommentQueue",
+          "when": "false"
+        },
+        {
+          "command": "reviewKit.mrEditorCommentReply",
+          "when": "false"
         }
       ],
       "view/item/context": [
